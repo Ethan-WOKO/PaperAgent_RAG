@@ -1,0 +1,61 @@
+# ===== 仓库根 .gitignore（PaperAgent_RAG）=====
+# 只跟踪 private-helper-agent/ 与 memory-bank/，其余排除
+
+# 第三方参考项目（只读，不提交）
+/PaiSmart-main/
+/paper-agent/
+
+# 备份目录
+/memory-bank(备份)/
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# 根目录历史误建的空文件（如有残留）
+/ASSEMBLE
+/COMPLETE
+/GAP_ANALYSIS
+/POLISH
+/PROFILE
+/RETRIEVE
+/ROLE_RECOGNITION
+/STRUCTURE_CHECK
+
+# 密钥与环境
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Java / Maven 构建产物
+target/
+*.class
+*.jar
+*.war
+*.ear
+
+# 前端
+node_modules/
+dist/
+.vite/
+.pnpm-store/
+
+# 运行时数据
+storage/
+logs/
+uploads/
+tmp/
+tmp-*.ps1
+tmp_*.py
+
+# 测试 / 覆盖率
+coverage/
+.jacoco/
+
+# 本地 MCP 工作区
+workspace/
