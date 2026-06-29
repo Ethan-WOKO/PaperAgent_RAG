@@ -1,13 +1,19 @@
 <template>
   <AppLayout>
-    <div class="chat-page">
+    <div class="chat-page research-chat-page">
       <aside class="chat-sidebar">
-        <NCard title="会话" size="small" class="chat-panel">
+        <NCard size="small" class="chat-panel chat-session-panel">
+          <template #header>
+            <div class="panel-heading">
+              <span>Recent Conversations</span>
+              <small>{{ sessions.length }} sessions</small>
+            </div>
+          </template>
           <template #header-extra>
-            <NButton type="primary" size="small" round @click="handleCreateSession">新建会话</NButton>
+            <NButton type="primary" size="small" circle @click="handleCreateSession">+</NButton>
           </template>
 
-          <div class="chat-sidebar__hint">切换会话会保留对应模型快照与历史记录。</div>
+          <div class="chat-sidebar__hint">会话保留模型、RAG 和工具设置。建议按任务主题拆分对话。</div>
 
           <NSpace vertical :size="8">
             <NEmpty v-if="sessions.length === 0" description="还没有会话" size="small" />
@@ -32,40 +38,53 @@
 
       <section class="chat-main">
         <NCard
-          class="chat-panel"
-          :title="activeSessionTitle"
-          :content-style="{ height: 'calc(100% - 28px)', display: 'flex', flexDirection: 'column', gap: '16px' }"
+          class="chat-panel chat-workspace-panel"
+          :content-style="{ height: 'calc(100% - 76px)', display: 'flex', flexDirection: 'column', gap: '14px' }"
         >
+          <template #header>
+            <div class="chat-room-title">
+              <div>
+                <h2>{{ activeSessionTitle }}</h2>
+                <p>Ask a research question, search literature, or describe a task.</p>
+              </div>
+              <div class="chat-room-tags">
+                <span>Literature Review</span>
+                <span>Agent Workflow</span>
+                <span>Knowledge RAG</span>
+              </div>
+            </div>
+          </template>
           <template #header-extra>
             <div class="chat-toolbar">
-              <NCheckbox v-model:checked="ragDisabled">本次不使用知识库</NCheckbox>
+              <NCheckbox v-model:checked="ragDisabled">禁用知识库</NCheckbox>
               <NSelect
                 v-model:value="selectedSkillId"
-                style="width: 240px"
+                style="width: 220px"
                 clearable
                 :options="skillOptions"
-                placeholder="选择 Skill（可选）"
+                placeholder="Skill（可选）"
               />
-              <NCheckbox v-model:checked="showProcessMessages">显示中间过程</NCheckbox>
-              <NButton secondary round @click="reloadCurrentMessages" :disabled="!selectedSessionId">刷新历史</NButton>
+              <NCheckbox v-model:checked="showProcessMessages">过程</NCheckbox>
+              <NButton secondary round @click="reloadCurrentMessages" :disabled="!selectedSessionId">刷新</NButton>
             </div>
           </template>
 
           <div class="chat-intro-bar">
             <div>
-              <div class="chat-intro-bar__title">当前对话工作区</div>
-              <div class="chat-intro-bar__desc">默认按会话快照使用模型；选择 Skill 时将进入结构化处理模式。中间过程默认折叠，可按需展开查看。</div>
+              <div class="chat-intro-bar__title">Research Copilot Workspace</div>
+              <div class="chat-intro-bar__desc">支持 `/literature topic 5篇 bibtex` 检索文献；后续 Agent 将在右侧展示任务拆解、工具调用和执行轨迹。</div>
             </div>
+            <div class="chat-intro-bar__status"><span /> Live</div>
           </div>
 
-          <div class="chat-messages">
+          <div ref="messagesContainerRef" class="chat-messages">
             <NEmpty v-if="filteredMessages.length === 0" description="发一条消息开始对话" class="chat-empty" />
             <div v-for="message in filteredMessages" :key="message.localId" class="message-row" :class="`message-row--${message.role}`">
               <template v-if="message.role === 'system' || message.role === 'tool'">
                 <details class="process-message-card">
                   <summary class="process-message-card__summary">
-                    <span>{{ message.role === 'system' ? '系统过程已折叠' : '工具输出已折叠' }}</span>
-                    <span class="process-message-card__meta">点击展开</span>
+                    <span>{{ message.role === 'system' ? 'System process' : 'Tool output' }}</span>
+                    <span class="process-message-card__meta">展开</span>
                   </summary>
                   <div class="process-message-card__content">
                     <template v-for="(segment, index) in getMessageSegments(message.content)" :key="`${message.localId}-${index}`">
@@ -77,8 +96,9 @@
               </template>
 
               <template v-else>
+                <div class="message-avatar" :class="`message-avatar--${message.role}`">{{ message.role === 'user' ? '你' : '✦' }}</div>
                 <div class="message-bubble">
-                  <div class="message-role">{{ message.role === 'user' ? '你' : '研伴' }}</div>
+                  <div class="message-role">{{ message.role === 'user' ? 'You' : 'ScholarAI' }}</div>
                   <div class="message-content">
                     <template v-for="(segment, index) in getMessageSegments(message.content || (message.role === 'assistant' ? '正在思考...' : '...'))" :key="`${message.localId}-${index}`">
                       <pre v-if="segment.type === 'code'" class="message-code-block"><code>{{ segment.content }}</code></pre>
@@ -100,28 +120,69 @@
           </div>
 
           <div class="chat-composer">
-            <div class="chat-composer__label">输入问题</div>
+            <div class="chat-composer__quick-actions">
+              <button type="button" @click="draft = '/literature polarimetric FDA-MIMO self-protection jamming 5篇 bibtex'">Search Papers</button>
+              <button type="button" @click="draft = '帮我润色论文'">Polish Paper</button>
+              <button type="button" @click="showProcessMessages = !showProcessMessages">Tool Trace</button>
+            </div>
             <NInput
               v-model:value="draft"
               type="textarea"
-              :autosize="{ minRows: 4, maxRows: 8 }"
-              placeholder="请输入你的问题，支持结合知识库、Skill 或论文修改流程..."
+              :autosize="{ minRows: 3, maxRows: 7 }"
+              placeholder="Ask a research question or describe a task..."
               @keydown.enter.exact.prevent="handleSend"
             />
             <div class="chat-composer__footer">
-              <span class="chat-hint">Enter 发送，Shift+Enter 换行</span>
-              <NButton type="primary" round :loading="sending" @click="handleSend">发送</NButton>
+              <span class="chat-hint">Enter 发送 · Shift+Enter 换行</span>
+              <NButton type="primary" round :loading="sending" @click="handleSend">发送 →</NButton>
             </div>
           </div>
         </NCard>
       </section>
+
+      <aside class="agent-sidebar">
+        <section class="agent-card agent-card--plan">
+          <div class="agent-card__head">
+            <div>
+              <strong>Research Agent</strong>
+              <span>Agent Plan</span>
+            </div>
+            <em>Live</em>
+          </div>
+          <div class="agent-progress"><span :style="{ width: sending ? '62%' : '36%' }" /></div>
+          <div class="agent-plan-list">
+            <div class="agent-plan-step agent-plan-step--done"><i>1</i><span>Understand request</span><small>Done</small></div>
+            <div class="agent-plan-step" :class="{ 'agent-plan-step--active': sending }"><i>2</i><span>Search literature</span><small>{{ sending ? 'Running' : 'Ready' }}</small></div>
+            <div class="agent-plan-step"><i>3</i><span>Analyze papers</span><small>Pending</small></div>
+            <div class="agent-plan-step"><i>4</i><span>Draft response</span><small>Pending</small></div>
+            <div class="agent-plan-step"><i>5</i><span>Verify citations</span><small>Pending</small></div>
+          </div>
+        </section>
+
+        <section class="agent-card">
+          <div class="agent-card__head"><strong>Tools & Execution</strong><a>View all</a></div>
+          <div class="tool-call-row"><span>⌕</span><div><strong>search_literature</strong><small>OpenAlex / arXiv / local cards</small></div><em>Ready</em></div>
+          <div class="tool-call-row"><span>▣</span><div><strong>search_knowledge</strong><small>Private RAG retrieval</small></div><em>{{ ragDisabled ? 'Off' : 'Ready' }}</em></div>
+          <div class="tool-call-row"><span>✎</span><div><strong>paper polish</strong><small>Critic / repair workflow</small></div><em>Ready</em></div>
+          <div class="tool-call-row"><span>⚙</span><div><strong>skill mode</strong><small>{{ selectedSkillId || 'No skill selected' }}</small></div><em>{{ selectedSkillId ? 'On' : 'Idle' }}</em></div>
+        </section>
+
+        <section class="agent-card">
+          <div class="agent-card__head"><strong>Execution Trace</strong><span>{{ messages.length }} msgs</span></div>
+          <div class="execution-log">
+            <div><time>Now</time><span>Workspace ready</span><em>Info</em></div>
+            <div v-if="sending"><time>Now</time><span>Agent response streaming</span><em>Running</em></div>
+            <div><time>RAG</time><span>{{ ragDisabled ? 'Knowledge disabled' : 'Knowledge enabled' }}</span><em>{{ ragDisabled ? 'Off' : 'Ready' }}</em></div>
+          </div>
+        </section>
+      </aside>
     </div>
   </AppLayout>
 </template>
 
 <script setup lang="ts">
 import { NButton, NCard, NCheckbox, NEmpty, NInput, NSelect, NSpace } from 'naive-ui';
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import AppLayout from '@/components/AppLayout.vue';
 import { createSession, listMessages, listSessions, type AgentMessageResponse, type AgentSessionResponse } from '@/api/agent';
@@ -166,6 +227,7 @@ const ragDisabled = ref(false);
 const showProcessMessages = ref(false);
 const currentSocket = ref<WebSocket | null>(null);
 const currentAssistantMessageId = ref<string | null>(null);
+const messagesContainerRef = ref<HTMLElement | null>(null);
 
 const skillOptions = computed(() => availableSkills.value
   .filter((skill) => skill.enabled)
@@ -223,6 +285,7 @@ async function reloadCurrentMessages() {
   }
   const { data } = await listMessages(selectedSessionId.value);
   messages.value = data.map(toViewMessage);
+  await scrollMessagesToBottom();
 }
 
 async function handleCreateSession() {
@@ -272,6 +335,7 @@ async function handleSend() {
       content: '',
       navigationUrl: null,
     });
+    await scrollMessagesToBottom();
 
     await sendWsMessage(sessionId, content, ragDisabled.value, selectedSkillId.value);
   } catch (error: any) {
@@ -355,11 +419,21 @@ async function sendWsMessage(sessionId: number, content: string, disableRag: boo
   });
 }
 
-function appendAssistantChunk(chunk: string) {
+async function appendAssistantChunk(chunk: string) {
   const target = messages.value.find((item) => item.localId === currentAssistantMessageId.value);
   if (target) {
     target.content += chunk;
+    await scrollMessagesToBottom();
   }
+}
+
+async function scrollMessagesToBottom() {
+  await nextTick();
+  const container = messagesContainerRef.value;
+  if (!container) {
+    return;
+  }
+  container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
 }
 
 function attachAssistantNavigation(navigationUrl: string) {
