@@ -113,6 +113,22 @@ export interface PaperArtifactResponse {
   createdAt: string;
 }
 
+export interface PaperTaskHistoryResponse {
+  id: number;
+  title: string;
+  sourceFilename: string | null;
+  status: string;
+  currentStage: string | null;
+  errorMessage: string | null;
+  targetLanguage: 'zh' | 'en' | string;
+  finalObjectKey: string | null;
+  literatureMinCount: number | null;
+  literatureCount: number | null;
+  createdAt: string;
+  updatedAt: string;
+  artifacts: PaperArtifactResponse[];
+}
+
 export function createPaperTask(formData: FormData) {
   return http.post<PaperTaskResponse>('/paper/process', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -121,6 +137,10 @@ export function createPaperTask(formData: FormData) {
 
 export function getPaperTask(taskId: number) {
   return http.get<PaperTaskResponse>(`/paper/tasks/${taskId}`);
+}
+
+export function getPaperTasks() {
+  return http.get<PaperTaskHistoryResponse[]>('/paper/tasks');
 }
 
 export function pausePaperTask(taskId: number) {

@@ -5,10 +5,13 @@ import com.yanban.paper.domain.PaperTaskArtifact;
 import com.yanban.paper.domain.PaperTaskArtifactRepository;
 import com.yanban.paper.domain.PaperTaskRepository;
 import com.yanban.paper.web.PaperProcessRequest;
+import com.yanban.paper.web.PaperTaskHistoryResponse;
 import com.yanban.paper.web.PaperTaskResponse;
 import java.io.ByteArrayOutputStream;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.springframework.core.io.ByteArrayResource;
@@ -128,6 +131,20 @@ public class PaperTaskService {
     private String json(String value) {
         if (value == null) return "";
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    @Transactional(readOnly = true)
+    public List<PaperTaskHistoryResponse> listTasks(Long userId) {
+        List<PaperTask> userTasks = paperTaskRepository.findByUserIdOrderByCreatedAtDesc(userId);
+        if (userTasks.isEmpty()) {
+            return List.of();
+        }
+        List<Long> taskIds = userTasks.stream().map(PaperTask::getId).toList();
+        Map<Long, List<PaperTaskArtifact>> artifactsByTask = artifactRepository.findByTaskIdInOrderByCreatedAt(taskIds).stream()
+                .collect(Collectors.groupingBy(PaperTaskArtifact::getTaskId));
+        return userTasks.stream()
+                .map(task -> PaperTaskHistoryResponse.from(task, artifactsByTask.getOrDefault(task.getId(), List.of())))
+                .toList();
     }
 
     @Transactional(readOnly = true)

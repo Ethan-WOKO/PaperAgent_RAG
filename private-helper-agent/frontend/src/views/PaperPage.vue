@@ -29,6 +29,7 @@
 
       <NGrid :cols="24" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
         <NGridItem span="24 l:7">
+          <NSpace vertical size="medium">
           <NCard class="workbench-card" :bordered="false">
             <template #header><div class="section-title">上传与参数</div></template>
             <NSpace vertical size="large">
@@ -74,6 +75,33 @@
               <NButton type="primary" block :loading="submitting" @click="handleSubmit">开始处理</NButton>
             </NSpace>
           </NCard>
+
+          <NCard class="workbench-card history-card" :bordered="false">
+            <template #header><div class="section-title">历史任务</div></template>
+            <template #header-extra><NButton size="small" tertiary :loading="historyLoading" @click="loadHistory">刷新</NButton></template>
+            <div class="paper-history-list">
+              <NEmpty v-if="historyTasks.length === 0" description="暂无历史任务" />
+              <div v-for="task in historyTasks" :key="task.id" class="paper-history-item" :class="{ 'paper-history-item--active': task.id === currentTaskId }">
+                <div class="paper-history-item__head">
+                  <button type="button" class="paper-history-title" @click="openHistoryTask(task.id)">{{ task.title || task.sourceFilename || `Task ${task.id}` }}</button>
+                  <NTag size="small" :type="statusTagType(task.status)">{{ task.status }}</NTag>
+                </div>
+                <div class="paper-history-item__meta">
+                  创建：{{ formatDateTime(task.createdAt) }}<br />
+                  更新：{{ formatDateTime(task.updatedAt) }}
+                </div>
+                <div class="paper-history-files">
+                  <span v-for="artifact in downloadableHistoryArtifacts(task)" :key="artifact.id">{{ artifactDisplayName(artifact) }}</span>
+                  <span v-if="downloadableHistoryArtifacts(task).length === 0">暂无结果文件</span>
+                </div>
+                <NSpace size="small">
+                  <NButton size="tiny" secondary @click="openHistoryTask(task.id)">查看</NButton>
+                  <NButton size="tiny" type="primary" :disabled="!historyTaskDownloadable(task)" :loading="downloadingTaskId === task.id" @click="downloadHistoryTask(task.id)">下载结果</NButton>
+                </NSpace>
+              </div>
+            </div>
+          </NCard>
+          </NSpace>
         </NGridItem>
 
         <NGridItem span="24 l:10">
@@ -383,6 +411,7 @@ import {
   getPaperSections,
   getPaperSuggestions,
   getPaperTask,
+  getPaperTasks,
   pausePaperTask,
   resumePaperTask,
   stopPaperTask,
@@ -394,6 +423,7 @@ import {
   type PaperSectionResponse,
   type PaperSuggestionResponse,
   type PaperSseEvent,
+  type PaperTaskHistoryResponse,
   type PaperTaskResponse,
 } from '@/api/paper';
 import { ui } from '@/ui';
@@ -413,6 +443,9 @@ const sections = ref<PaperSectionResponse[]>([]);
 const suggestions = ref<PaperSuggestionResponse[]>([]);
 const artifacts = ref<PaperArtifactResponse[]>([]);
 const analysis = ref<PaperAnalysisResponse | null>(null);
+const historyTasks = ref<PaperTaskHistoryResponse[]>([]);
+const historyLoading = ref(false);
+const downloadingTaskId = ref<number | null>(null);
 const previewMode = ref<'basic' | 'advanced'>('basic');
 const suggestionSubmitting = ref<number | null>(null);
 const clarificationAnswers = reactive<Record<number, string>>({});
@@ -529,6 +562,7 @@ const sseStatusText = computed(() => {
 });
 
 onMounted(async () => {
+  await loadHistory();
   const taskId = Number(route.query.taskId);
   if (!Number.isNaN(taskId) && taskId > 0) {
     await loadTask(taskId, true);
@@ -597,11 +631,38 @@ async function handleSubmit() {
     }
     await router.replace({ path: '/paper', query: { taskId: String(data.id) } });
     connectSse();
+    await loadHistory();
     ui.message.success('论文任务已创建');
   } catch (error: any) {
     ui.message.error(error.response?.data?.message || '创建论文任务失败');
   } finally {
     submitting.value = false;
+  }
+}
+
+async function loadHistory() {
+  historyLoading.value = true;
+  try {
+    const { data } = await getPaperTasks();
+    historyTasks.value = data;
+  } catch (error: any) {
+    ui.message.error(error.response?.data?.message || '加载历史任务失败');
+  } finally {
+    historyLoading.value = false;
+  }
+}
+
+async function openHistoryTask(taskId: number) {
+  await router.replace({ path: '/paper', query: { taskId: String(taskId) } });
+  await loadTask(taskId, ['PENDING', 'RUNNING', 'PAUSED', 'WAITING_INPUT'].includes(historyTasks.value.find((item) => item.id === taskId)?.status || ''));
+}
+
+async function downloadHistoryTask(taskId: number) {
+  downloadingTaskId.value = taskId;
+  try {
+    await downloadTaskById(taskId, historyTasks.value.find((item) => item.id === taskId)?.sourceFilename || undefined);
+  } finally {
+    downloadingTaskId.value = null;
   }
 }
 
@@ -697,6 +758,7 @@ async function streamPaperEvents(taskId: number, token: string, signal: AbortSig
             await loadClarificationsAndSections(taskId);
           }
           if (['complete', 'error', 'paused'].includes(event.type)) {
+            await loadHistory();
             abortController?.abort();
             sseStatus.value = 'closed';
             return;
@@ -753,10 +815,18 @@ async function handleDownload() {
   if (!currentTaskId.value) return;
   downloading.value = true;
   try {
-    const { data, headers } = await downloadPaperTask(currentTaskId.value);
+    await downloadTaskById(currentTaskId.value, currentTask.value?.sourceFilename || undefined);
+  } finally {
+    downloading.value = false;
+  }
+}
+
+async function downloadTaskById(taskId: number, fallbackFilename?: string) {
+  try {
+    const { data, headers } = await downloadPaperTask(taskId);
     const contentDisposition = String(headers['content-disposition'] || '');
     const matched = contentDisposition.match(/filename=\"?([^\";]+)\"?/i);
-    const filename = decodeURIComponent(matched?.[1] || currentTask.value?.sourceFilename || 'paper-result.docx');
+    const filename = decodeURIComponent(matched?.[1] || fallbackFilename || 'paper-result.zip');
     const blobUrl = window.URL.createObjectURL(data);
     const anchor = document.createElement('a');
     anchor.href = blobUrl;
@@ -768,9 +838,30 @@ async function handleDownload() {
     ui.message.success('下载已开始');
   } catch (error: any) {
     ui.message.error(error.response?.data?.message || '下载结果文件失败');
-  } finally {
-    downloading.value = false;
   }
+}
+
+function downloadableHistoryArtifacts(task: PaperTaskHistoryResponse) {
+  return (task.artifacts || []).filter((item) => downloadableArtifactTypes.includes(item.type));
+}
+
+function historyTaskDownloadable(task: PaperTaskHistoryResponse) {
+  return Boolean(task.finalObjectKey) || downloadableHistoryArtifacts(task).length > 0;
+}
+
+function artifactDisplayName(artifact: PaperArtifactResponse) {
+  const labels: Record<string, string> = {
+    polished_tex: 'polished.tex',
+    suggested_bib: 'suggested.bib',
+    suggested_bib_novel: 'suggested-novel.bib',
+    review_report: 'review-report.md',
+    retrieved_literature_json: 'retrieved-literature.json',
+    retrieved_literature_md: 'retrieved-literature.md',
+    source_tex: 'source.tex',
+    source_bib: 'source.bib',
+  };
+  const base = labels[artifact.type] || artifact.type;
+  return artifact.version && artifact.version > 1 ? `${base} v${artifact.version}` : base;
 }
 
 function formatFileSize(value: number) {

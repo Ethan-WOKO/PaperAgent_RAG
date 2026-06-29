@@ -62,6 +62,11 @@ public class PaperController {
         return paperTaskService.createTask(userId, request);
     }
 
+    @GetMapping("/api/v1/paper/tasks")
+    public List<PaperTaskHistoryResponse> tasks(@AuthenticationPrincipal(expression = "id") Long userId) {
+        return paperTaskService.listTasks(userId);
+    }
+
     @GetMapping("/api/v1/paper/tasks/{taskId}")
     public PaperTaskResponse getTask(@AuthenticationPrincipal(expression = "id") Long userId,
                                      @PathVariable Long taskId) {

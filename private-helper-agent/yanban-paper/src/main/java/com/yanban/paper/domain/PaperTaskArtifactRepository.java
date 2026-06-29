@@ -8,4 +8,6 @@ public interface PaperTaskArtifactRepository extends JpaRepository<PaperTaskArti
     List<PaperTaskArtifact> findByTaskIdOrderByCreatedAt(Long taskId);
 
     Optional<PaperTaskArtifact> findFirstByTaskIdAndTypeOrderByVersionDesc(Long taskId, String type);
+
+    List<PaperTaskArtifact> findByTaskIdInOrderByCreatedAt(java.util.Collection<Long> taskIds);
 }
