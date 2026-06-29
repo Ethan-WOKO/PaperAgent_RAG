@@ -1,7 +1,12 @@
 package com.yanban.paper.web;
 
+import com.yanban.paper.domain.PaperTaskAnalysis;
+import com.yanban.paper.domain.PaperTaskAnalysisRepository;
+import com.yanban.paper.service.PaperClarificationService;
 import com.yanban.paper.service.PaperEventStreamService;
 import com.yanban.paper.service.PaperOrchestrator;
+import com.yanban.paper.service.PaperPreviewService;
+import com.yanban.paper.service.PaperSectionService;
 import com.yanban.paper.service.PaperTaskService;
 import jakarta.validation.Valid;
 import org.springframework.core.io.Resource;
@@ -11,10 +16,13 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import java.util.List;
+import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
@@ -26,13 +34,25 @@ public class PaperController {
     private final PaperTaskService paperTaskService;
     private final PaperEventStreamService paperEventStreamService;
     private final PaperOrchestrator paperOrchestrator;
+    private final PaperClarificationService paperClarificationService;
+    private final PaperSectionService paperSectionService;
+    private final PaperPreviewService paperPreviewService;
+    private final PaperTaskAnalysisRepository paperTaskAnalysisRepository;
 
     public PaperController(PaperTaskService paperTaskService,
                            PaperEventStreamService paperEventStreamService,
-                           PaperOrchestrator paperOrchestrator) {
+                           PaperOrchestrator paperOrchestrator,
+                           PaperClarificationService paperClarificationService,
+                           PaperSectionService paperSectionService,
+                           PaperPreviewService paperPreviewService,
+                           PaperTaskAnalysisRepository paperTaskAnalysisRepository) {
         this.paperTaskService = paperTaskService;
         this.paperEventStreamService = paperEventStreamService;
         this.paperOrchestrator = paperOrchestrator;
+        this.paperClarificationService = paperClarificationService;
+        this.paperSectionService = paperSectionService;
+        this.paperPreviewService = paperPreviewService;
+        this.paperTaskAnalysisRepository = paperTaskAnalysisRepository;
     }
 
     @PostMapping("/api/v1/paper/process")
@@ -76,16 +96,81 @@ public class PaperController {
         paperOrchestrator.stop(userId, taskId);
     }
 
+    @GetMapping("/api/v1/paper/tasks/{taskId}/sections")
+    public List<PaperSectionResponse> sections(@AuthenticationPrincipal(expression = "id") Long userId,
+                                                @PathVariable Long taskId) {
+        return paperSectionService.list(userId, taskId).stream()
+                .map(PaperSectionResponse::from)
+                .toList();
+    }
+
+    @PostMapping("/api/v1/paper/tasks/{taskId}/sections/{sectionId}/role")
+    public PaperSectionResponse updateSectionRole(@AuthenticationPrincipal(expression = "id") Long userId,
+                                                   @PathVariable Long taskId,
+                                                   @PathVariable Long sectionId,
+                                                   @Valid @RequestBody PaperSectionRoleUpdateRequest request) {
+        return PaperSectionResponse.from(paperSectionService.updateRole(userId, taskId, sectionId, request.role()));
+    }
+
+    @GetMapping("/api/v1/paper/tasks/{taskId}/clarifications")
+    public List<PaperClarificationResponse> clarifications(@AuthenticationPrincipal(expression = "id") Long userId,
+                                                           @PathVariable Long taskId) {
+        return paperClarificationService.list(userId, taskId).stream()
+                .map(PaperClarificationResponse::from)
+                .toList();
+    }
+
+    @PostMapping("/api/v1/paper/tasks/{taskId}/clarifications/{clarificationId}/answer")
+    public PaperClarificationResponse answerClarification(@AuthenticationPrincipal(expression = "id") Long userId,
+                                                          @PathVariable Long taskId,
+                                                          @PathVariable Long clarificationId,
+                                                          @Valid @RequestBody PaperClarificationAnswerRequest request) {
+        return PaperClarificationResponse.from(
+                paperClarificationService.answer(userId, taskId, clarificationId, request.answerJson())
+        );
+    }
+
+    @GetMapping("/api/v1/paper/tasks/{taskId}/suggestions")
+    public List<PaperSuggestionResponse> suggestions(@AuthenticationPrincipal(expression = "id") Long userId,
+                                                     @PathVariable Long taskId) {
+        return paperPreviewService.listSuggestions(userId, taskId);
+    }
+
+    @PostMapping("/api/v1/paper/tasks/{taskId}/suggestions/{suggestionId}/status")
+    public PaperSuggestionResponse updateSuggestionStatus(@AuthenticationPrincipal(expression = "id") Long userId,
+                                                          @PathVariable Long taskId,
+                                                          @PathVariable Long suggestionId,
+                                                          @Valid @RequestBody PaperSuggestionStatusUpdateRequest request) {
+        return paperPreviewService.updateSuggestionStatus(userId, taskId, suggestionId, request.status());
+    }
+
+    @GetMapping("/api/v1/paper/tasks/{taskId}/analysis")
+    public Map<String, String> analysis(@AuthenticationPrincipal(expression = "id") Long userId,
+                                        @PathVariable Long taskId) {
+        paperTaskService.getTask(userId, taskId);
+        PaperTaskAnalysis analysis = paperTaskAnalysisRepository.findByTaskId(taskId).orElse(null);
+        return Map.of(
+                "researchProfileJson", analysis == null || analysis.getResearchProfileJson() == null ? "{}" : analysis.getResearchProfileJson(),
+                "conceptLadderJson", analysis == null || analysis.getConceptLadderJson() == null ? "{}" : analysis.getConceptLadderJson(),
+                "gapMatrixJson", analysis == null || analysis.getGapMatrixJson() == null ? "{}" : analysis.getGapMatrixJson()
+        );
+    }
+
+    @GetMapping("/api/v1/paper/tasks/{taskId}/artifacts")
+    public List<PaperArtifactResponse> artifacts(@AuthenticationPrincipal(expression = "id") Long userId,
+                                                 @PathVariable Long taskId) {
+        return paperPreviewService.listArtifacts(userId, taskId).stream()
+                .map(PaperArtifactResponse::from)
+                .toList();
+    }
+
     @GetMapping("/api/v1/paper/tasks/{taskId}/download")
     public ResponseEntity<Resource> download(@AuthenticationPrincipal(expression = "id") Long userId,
                                              @PathVariable Long taskId) {
-        PaperTaskResponse task = paperTaskService.getTask(userId, taskId);
         Resource resource = paperTaskService.downloadResult(userId, taskId);
-        String filename = (task.sourceFilename() == null || task.sourceFilename().isBlank())
-                ? "paper-result.docx"
-                : task.sourceFilename();
+        String filename = paperTaskService.downloadFilename(userId, taskId);
         return ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
+                .contentType(MediaType.parseMediaType(paperTaskService.downloadContentType(userId, taskId)))
                 .header(HttpHeaders.CONTENT_DISPOSITION,
                         ContentDisposition.attachment().filename(filename).build().toString())
                 .body(resource);

@@ -33,6 +33,15 @@ public class PaperTask {
     @Column(name = "final_object_key", length = 512)
     private String finalObjectKey;
 
+    @Column(name = "input_format", length = 16)
+    private String inputFormat;
+
+    @Column(length = 32)
+    private String mode;
+
+    @Column(name = "main_entry", length = 512)
+    private String mainEntry;
+
     @Column(nullable = false, length = 32)
     private String status;
 
@@ -44,6 +53,12 @@ public class PaperTask {
 
     @Column(name = "error_message")
     private String errorMessage;
+
+    @Column(name = "literature_min_count")
+    private Integer literatureMinCount;
+
+    @Column(name = "literature_count")
+    private Integer literatureCount;
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
@@ -74,15 +89,25 @@ public class PaperTask {
     public String getSourceFilename() { return sourceFilename; }
     public String getObjectKey() { return objectKey; }
     public String getFinalObjectKey() { return finalObjectKey; }
+    public String getInputFormat() { return inputFormat; }
+    public String getMode() { return mode; }
+    public String getMainEntry() { return mainEntry; }
     public String getStatus() { return status; }
     public String getTargetLanguage() { return targetLanguage; }
     public String getCurrentStage() { return currentStage; }
     public String getErrorMessage() { return errorMessage; }
+    public Integer getLiteratureMinCount() { return literatureMinCount; }
+    public Integer getLiteratureCount() { return literatureCount; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
 
     public void setFinalObjectKey(String finalObjectKey) { this.finalObjectKey = finalObjectKey; }
+    public void setInputFormat(String inputFormat) { this.inputFormat = inputFormat; }
+    public void setMode(String mode) { this.mode = mode; }
+    public void setMainEntry(String mainEntry) { this.mainEntry = mainEntry; }
     public void setStatus(String status) { this.status = status; }
     public void setCurrentStage(String currentStage) { this.currentStage = currentStage; }
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
+    public void setLiteratureMinCount(Integer literatureMinCount) { this.literatureMinCount = literatureMinCount; }
+    public void setLiteratureCount(Integer literatureCount) { this.literatureCount = literatureCount; }
 }

@@ -74,4 +74,9 @@ public class PaperTaskRound {
     public String getNotes() { return notes; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
+
+    public void setStatus(String status) { this.status = status; }
+    public void setInputText(String inputText) { this.inputText = inputText; }
+    public void setOutputText(String outputText) { this.outputText = outputText; }
+    public void setNotes(String notes) { this.notes = notes; }
 }

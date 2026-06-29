@@ -52,6 +52,13 @@ uploads/
 tmp/
 tmp-*.ps1
 tmp_*.py
+.pi/
+data/
+**/data/
+
+# 本地论文测试输入/输出，不提交
+/reference/
+/IEEE_TAES_regular_template_latex_v6-artifacts*/
 
 # 测试 / 覆盖率
 coverage/

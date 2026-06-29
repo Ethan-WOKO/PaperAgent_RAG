@@ -60,13 +60,16 @@ class PaperControllerIntegrationTest {
     }
 
     @Test
-    void uploadDocxCreatesPendingTask() throws Exception {
+    void uploadLatexCreatesPendingTask() throws Exception {
         String token = registerAndGetToken("paper_user_a");
 
         MvcResult result = mockMvc.perform(multipart("/api/v1/paper/process")
-                        .file(new MockMultipartFile("file", "sample.docx",
-                                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                "docx-content".getBytes()))
+                        .file(new MockMultipartFile("mainTex", "main.tex",
+                                "application/x-tex",
+                                "\\documentclass{article}\\begin{document}Hi\\end{document}".getBytes()))
+                        .file(new MockMultipartFile("bibFile", "refs.bib",
+                                "text/x-bibtex",
+                                "@article{a,title={A}}".getBytes()))
                         .param("scoreThreshold", "75")
                         .param("maxRounds", "3")
                         .param("innerMaxAttempts", "2")
@@ -74,7 +77,7 @@ class PaperControllerIntegrationTest {
                         .param("targetLanguage", "zh")
                         .header("Authorization", "Bearer " + token))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.sourceFilename").value("sample.docx"))
+                .andExpect(jsonPath("$.sourceFilename").value("main.tex"))
                 .andExpect(jsonPath("$.objectKey", not(blankOrNullString())))
                 .andReturn();
 
@@ -84,6 +87,8 @@ class PaperControllerIntegrationTest {
         org.assertj.core.api.Assertions.assertThat(task.getStatus()).isIn("PENDING", "RUNNING", "COMPLETED");
         org.assertj.core.api.Assertions.assertThat(task.getObjectKey()).isNotBlank();
         org.assertj.core.api.Assertions.assertThat(task.getTargetLanguage()).isEqualTo("zh");
+        org.assertj.core.api.Assertions.assertThat(task.getInputFormat()).isEqualTo("LATEX");
+        org.assertj.core.api.Assertions.assertThat(task.getMode()).isEqualTo("LATEX_BIB");
         org.assertj.core.api.Assertions.assertThat(paperTaskRoundRepository.findByTaskIdOrderByCreatedAtAsc(taskId)).isNotEmpty();
 
         mockMvc.perform(get("/api/v1/paper/tasks/{taskId}", taskId)
@@ -104,7 +109,7 @@ class PaperControllerIntegrationTest {
         String token = registerAndGetToken("paper_user_b");
 
         mockMvc.perform(multipart("/api/v1/paper/process")
-                        .file(new MockMultipartFile("file", "sample.pdf", "application/pdf", "pdf-content".getBytes()))
+                        .file(new MockMultipartFile("mainTex", "sample.pdf", "application/pdf", "pdf-content".getBytes()))
                         .param("scoreThreshold", "75")
                         .param("maxRounds", "3")
                         .param("innerMaxAttempts", "2")

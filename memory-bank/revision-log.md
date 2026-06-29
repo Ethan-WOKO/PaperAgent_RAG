@@ -357,6 +357,703 @@
 
 ---
 
+## 2026-06-17
+
+### 修订 19：完成 E-01 LaTeX 解析与文档模型第一版
+
+**问题背景**
+- 第二期已进入 E 阶段，需要先实现 L0/PARSE 地基：数据库落点、LaTeX 文档模型、务实解析器与硬性 lint，供后续角色识别、文献地基、gap 分析和润色链路复用。
+
+**修改内容**
+- 新增 Flyway `V9__create_latex_paper_tables.sql`，扩展 `paper_tasks` 并新增第二期论文核心表：`literature_cards`、`paper_sections`、`paper_task_analysis`、`paper_task_artifacts`、`paper_task_clarifications`、`paper_task_literature`、`suggestions`、`suggestion_evidence`。
+- 扩展 `PaperTask` 实体，新增 `PaperSection` 与 `PaperSectionRepository`，并更新 repository 测试覆盖 `paper_sections`。
+- 新增 `com.yanban.paper.latex` 包：`LatexParserService` 与 L0 文档模型 records，支持 preamble 元数据、sections、protectedSpans、floats、cite/ref、外部 `.bib` 与内联 `thebibliography`。
+- 实现第一版硬 lint：悬空 cite、断 ref、begin/end 不配平、花括号不配平、重复 bib key。
+- 新增 `LatexParserServiceTest`，覆盖章节/元数据/bib/保护 span、内联 bibliography、悬空 cite/ref、环境不配平与重复 bib key。
+
+**验证**
+- `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，5 tests。
+- `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests；Flyway V1~V9 在 H2 MySQL mode 下可迁移。
+
+**修改文件**
+- `private-helper-agent/yanban-api/src/main/resources/db/migration/V9__create_latex_paper_tables.sql`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/PaperTask.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/PaperSection.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/PaperSectionRepository.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/latex/*`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/domain/PaperRepositoryTest.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/latex/LatexParserServiceTest.java`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+---
+
+## 2026-06-17
+
+### 修订 20：完成 E-02 角色识别与结构确认检查点后端地基
+
+**问题背景**
+- E-01 已完成 LaTeX 文档模型与解析地基，E-02 需要在此基础上实现章节角色识别、结构歧义确认、用户可改角色与 WAITING_INPUT 持久化能力，避免 Related Work 等结构误判导致后续 gap/补丁链路“一步错步步错”。
+
+**修改内容**
+- 新增 `LatexRoleRecognitionService` 与相关 record：`RoleRecognitionResult`、`RecognizedSectionRole`、`StructureClarificationCandidate`。
+- 实现启发式角色识别与结构歧义检测：无显式 Related Work 但引言中存在引用密集/相关工作线索时，生成 `RELATED_WORK_PLACEMENT` 阻塞确认，默认保持在引言中。
+- 新增 `PaperTaskClarification` / `PaperTaskClarificationRepository` / `PaperClarificationService`：pending clarification 持久化、阻塞型问题置 `WAITING_INPUT`、回答后恢复 `RUNNING`，并发送 `clarification_needed` / `clarification_resolved` SSE。
+- 新增 `PaperSectionService` 与章节/角色 API：列出任务章节、用户覆盖角色（枚举校验，写 `role_source=user`、`role_confidence=1.0`）。
+- 扩展 `PaperController`，新增 sections 与 clarifications 端点。
+- 更新 repository 测试并新增 `LatexRoleRecognitionServiceTest`。
+
+**验证**
+- `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，7 tests。
+- `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests；API 自动装配与 Flyway V1~V9 均通过。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/PaperTaskClarification.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/PaperTaskClarificationRepository.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/PaperSectionRepository.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/latex/RoleRecognitionResult.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/latex/RecognizedSectionRole.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/latex/StructureClarificationCandidate.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/latex/LatexRoleRecognitionService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperClarificationService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperSectionService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/web/PaperClarificationAnswerRequest.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/web/PaperClarificationResponse.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/web/PaperSectionResponse.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/web/PaperSectionRoleUpdateRequest.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/web/PaperController.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/domain/PaperRepositoryTest.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/latex/LatexRoleRecognitionServiceTest.java`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+---
+
+## 2026-06-17
+
+### 修订 21：完成 E-03 Prompt 资源体系化
+
+**问题背景**
+- 第二期论文流水线后续 PROFILE、RETRIEVE、GAP、POLISH 等阶段都依赖稳定 prompt 模板与变量契约。需要将 prompt 从代码中抽离为可维护资源，并在渲染时严格校验必填变量。
+
+**修改内容**
+- 新增 `yanban-paper/src/main/resources/prompts/`，包含 9 个 prompt：`role-confirm`、`research-profile`、`section-polish`、`section-review`、`literature-extract`、`gap-analysis`、`relatedwork-gen`、`contribution-gen`、`abstract`。
+- Prompt 内容落实前期设计：角色枚举限制、标签式润色输出、review JSON、研究画像 JSON、L3c 文献抽取 JSON、Suggestion JSON、防幻觉铁律、polish/review 分离、占位符保留。
+- 新增 `PaperPromptTemplate` 与 `PaperPromptService`：classpath 加载 `prompts/*.md`，提取 `{{变量}}`，渲染时缺必填变量快速报错。
+- 新增 `PaperPromptServiceTest`，覆盖模板加载、变量替换、缺变量报错、未知 prompt 报错。
+
+**验证**
+- `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，11 tests。
+- `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests；API 资源加载与自动装配未受影响。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/resources/prompts/*.md`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperPromptTemplate.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperPromptService.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/service/PaperPromptServiceTest.java`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+---
+
+## 2026-06-17
+
+### 修订 22：完成 E-04 结构化研究画像服务地基
+
+**问题背景**
+- L3 文献地基需要稳定的检索种子与 gap 分析基准。E-04 需基于 E-01 的 LaTeX 文档模型和 E-03 的 prompt 体系，抽取结构化研究画像并持久化到 `paper_task_analysis`。
+
+**修改内容**
+- 新增 `PaperTaskAnalysis` / `PaperTaskAnalysisRepository`，覆盖 `paper_task_analysis` 表中的研究画像、概念阶梯、gap 矩阵字段。
+- 新增 `ResearchProfileResult` 与 `PaperResearchProfileService`：渲染 `research-profile` prompt，汇总 `LatexDocument` 章节内容，调用模型生成画像，解析 JSON 并写入 `research_profile_json`。
+- 增加 degraded 降级策略：模型返回非 JSON/解析失败时不阻断任务，保存 rawText 与 degraded 标记。
+- 为保持 `yanban-paper` 与 `yanban-core` 解耦，新增 `PaperModelClient` 轻量接口；在 `yanban-api` 新增 `PaperModelClientConfig`，用现有 `ChatModelProvider` 适配。
+- 更新 repository 测试并新增 `PaperResearchProfileServiceTest`，覆盖有效 JSON、非 JSON 降级、生成并保存画像。
+
+**验证**
+- `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，14 tests。
+- `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests；API 适配器装配正常。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/PaperTaskAnalysis.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/PaperTaskAnalysisRepository.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/ResearchProfileResult.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperResearchProfileService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperModelClient.java`
+- `private-helper-agent/yanban-api/src/main/java/com/yanban/api/paper/PaperModelClientConfig.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/domain/PaperRepositoryTest.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/service/PaperResearchProfileServiceTest.java`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+---
+
+## 2026-06-17
+
+### 修订 23：完成 E-05 文献检索与卡片地基
+
+**问题背景**
+- E-04 已产出结构化研究画像，E-05 需要基于画像进入 L3/RETRIEVE：从真实文献源召回候选，完成去重、缓存、排序、任务关联和概念阶梯落库，为后续 gap 分析提供有据可查的文献地基。
+
+**修改内容**
+- 新增 `LiteratureCard` / `LiteratureCardRepository` 与 `PaperTaskLiterature` / `PaperTaskLiteratureRepository`，覆盖全局文献卡片与任务-文献关联。
+- 新增 `com.yanban.paper.literature` 包：`LiteratureSource`、`LiteratureCandidate`、`LiteratureSearchResult`、`LiteratureService`、`OpenAlexLiteratureSource`、`ArxivLiteratureSource`、`LiteratureSourceConfig`。
+- 实现 OpenAlex 与 arXiv 第一版 provider：OpenAlex 解析 work JSON、authors、concepts、referenced_works、abstract_inverted_index；arXiv 解析 Atom entry、作者、分类、PDF 链接。
+- 实现 `LiteratureService`：从 `ResearchProfileResult` 生成多 query，跨 source 查询，按 DOI / arXiv id / OpenAlex id / S2 id / title hash 去重并 upsert，写入 `literature_cards` 与 `paper_task_literature`。
+- 实现简版 L3c 与排序：摘要规则抽取 `analysis_json`，标记 `rule-based-l3c-v1`；相关性按关键词、任务、problem/method、引用量、年份轻权排序；选中文献写入 `paper_task_analysis.concept_ladder_json`。
+- 更新 repository 测试覆盖 literature 表，新增 OpenAlex/arXiv 解析测试与 `LiteratureServiceTest`，验证真实候选来源、去重缓存、任务关联与概念阶梯写入。
+
+**验证**
+- `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，18 tests。
+- `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests；API 上下文、Flyway V1~V9 与自动装配均通过。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/LiteratureCard.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/LiteratureCardRepository.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/PaperTaskLiterature.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/PaperTaskLiteratureRepository.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/literature/*`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/domain/PaperRepositoryTest.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/literature/*Test.java`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+---
+
+## 2026-06-17
+
+### 修订 24：完成 E-06 gap 分析与建议生成服务地基
+
+**问题背景**
+- E-05 已产出真实检索文献卡片与概念阶梯，E-06 需要把 L3 文献地基转化为 L4 可采纳建议，并确保所有建议 evidence 均来自真实已选卡片，避免模型凭空生成引用、实验或贡献表述。
+
+**修改内容**
+- 新增 `Suggestion` / `SuggestionRepository` 与 `SuggestionEvidence` / `SuggestionEvidenceRepository` / `SuggestionEvidenceId`，覆盖 `suggestions` 与 `suggestion_evidence`。
+- 新增 `GapSuggestionResult` 与 `PaperGapAnalysisService`：读取任务、`paper_task_analysis`、已选 `paper_task_literature`、真实 `literature_cards`，渲染 `gap-analysis` prompt 并调用 `PaperModelClient`。
+- 实现 Suggestion JSON 解析与落库，覆盖 track/category/severity/statement/evidence/applicable/patch。
+- 实现 grounding 校验：模型 evidence 只能引用当前任务已选真实卡片；不存在或未选中的 card id 会被丢弃。
+- 实现诚实闸门第一版：无真实 evidence 的 ADVOCACY 自动转为 CRITIQUE，`applicable=false`，清空 patch，防止无支撑内容进入 LaTeX patch。
+- 将生成摘要写入 `paper_task_analysis.gap_matrix_json`；补齐 `PaperTaskAnalysis` 与 `Suggestion` 中 JSON/长文本字段长度，保持测试 DDL 与 Flyway LONGTEXT 设计一致。
+- 更新 repository 测试覆盖 suggestions/evidence，新增 `PaperGapAnalysisServiceTest` 覆盖 grounded suggestion、无效 evidence 过滤、无支撑 advocacy 转 critique。
+
+**验证**
+- `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，20 tests。
+- `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests；API 上下文、Flyway V1~V9 与新增 repository 扫描均通过。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/Suggestion.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/SuggestionRepository.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/SuggestionEvidence.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/SuggestionEvidenceId.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/SuggestionEvidenceRepository.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/PaperTaskAnalysis.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/GapSuggestionResult.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperGapAnalysisService.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/domain/PaperRepositoryTest.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/service/PaperGapAnalysisServiceTest.java`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+---
+
+## 2026-06-17
+
+### 修订 25：完成 E-07 占位保护分章润色服务地基
+
+**问题背景**
+- E-06 已完成有据可查的建议生成，E-07 需要进入 L1/L2 POLISH：在不破坏 LaTeX 结构、引用、数学与浮动体的前提下分章润色，并通过独立 review 回环控制质量。
+
+**修改内容**
+- 新增 `LatexMaskingService` 与 `MaskedLatexText`，支持保护 cite/ref/label/includegraphics、数学片段与重点环境，生成 `[[YANBAN_*_0001]]` 占位符并支持 unmask。
+- 新增占位符校验：输出占位符集合必须与输入集合一致，掉占位或新增占位符都会被拒绝。
+- 新增静态 lint 第一版：捕获花括号不配平、环境 begin/end 不配平、unmask 后残留占位符。
+- 新增 `SectionPolishResult` 与 `PaperSectionPolishService`：执行 mask → `section-polish` → 占位符校验 → unmask → lint → `section-review` 的分章润色链路。
+- 实现 retry 策略：掉占位或 lint blocker 会拒绝当次输出并重试；review 低分在未达最大轮次时带审查意见重试；仍失败则保留原章节。
+- References 角色默认跳过润色；润色结果写回 `paper_sections.polish_status/review_json/diff_json`，并记录内存型 object key 占位。
+- 补齐 `PaperSection.reviewJson/diffJson` 字段长度，保持测试 DDL 与 Flyway LONGTEXT 设计一致。
+- 新增 `LatexMaskingServiceTest` 与 `PaperSectionPolishServiceTest`，覆盖 mask/unmask、占位符缺失/新增校验、lint、低分重试、掉占位拒绝与保留原文。
+
+**验证**
+- `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，25 tests。
+- `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests；API 上下文与 Flyway V1~V9 均通过。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/PaperSection.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/latex/MaskedLatexText.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/latex/LatexMaskingService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/SectionPolishResult.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperSectionPolishService.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/latex/LatexMaskingServiceTest.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/service/PaperSectionPolishServiceTest.java`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+---
+
+## 2026-06-17
+
+### 修订 26：完成 E-08 三件套产出服务地基
+
+**问题背景**
+- E-07 已完成分章润色与 review 回环，E-08 需要把已有章节状态、真实文献 evidence 与建议结果组装为用户可下载/可审阅的三件套：润色后 `.tex`、`suggested.bib` 与审查报告。
+
+**修改内容**
+- 新增 `PaperTaskArtifact` / `PaperTaskArtifactRepository`，覆盖 `paper_task_artifacts` 表，支持按 task/type/version 查询产物。
+- 扩展 `PaperStorageService#storeArtifact`，支持保存 `.tex`、`.bib`、Markdown report 等任意论文产物。
+- 新增 `PaperAssembleResult` 与 `PaperAssembleService`，聚合 `LatexDocument`、`paper_sections`、`suggestions`、`suggestion_evidence`、`literature_cards` 生成产物。
+- 实现基础版输出：不改原文，只生成 `suggested_bib` 与 `review_report`。
+- 实现进阶版第一版输出：额外生成 `polished_tex`，按章节顺序拼接可用润色文本/原文，并更新 `paper_tasks.final_object_key`。
+- `suggested.bib` 只从真实 evidence 文献卡片生成，自动避让原 bib key；审查报告按章节状态、Suggestion 与 evidence 输出，并附 AI 自查免责声明。
+- 进阶版增加静态校验第一版：复用 LaTeX lint，并标记原 bib 缺失的 cite key。
+- 更新 repository 测试覆盖 `paper_task_artifacts`，新增 `PaperAssembleServiceTest` 覆盖基础版/进阶版产物、artifact 落库、suggested.bib 真实 evidence 来源、任务完成状态。
+
+**验证**
+- `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，27 tests。
+- `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests；API 上下文、Flyway V1~V9 与新增 repository 扫描均通过。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/PaperTaskArtifact.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/PaperTaskArtifactRepository.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperStorageService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperAssembleResult.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperAssembleService.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/domain/PaperRepositoryTest.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/service/PaperAssembleServiceTest.java`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+---
+
+## 2026-06-17
+
+### 修订 27：完成 E-09 论文质量样例集与评价记录
+
+**问题背景**
+- E-08 已完成三件套组装地基，E-09 需要形成可重复对比的论文质量验收方式，覆盖中文、英文和无 `.bib`/内联 bibliography 场景，并把人工评价与文献真实性核对纳入手测清单。
+
+**修改内容**
+- 新增中文 LaTeX 样例 `zh-rag-polish`：`main.tex` + `refs.bib`，覆盖中文章节、cite/ref/figure/math 与 RAG 论文主题。
+- 新增英文 LaTeX 样例 `en-literature-gap`：`main.tex` + `refs.bib`，覆盖 Abstract/Introduction/Method/Discussion/Conclusion、equation/ref/math 与 grounded writing 主题。
+- 新增无 `.bib` 内联 bibliography 样例 `inline-bibliography`，覆盖 `thebibliography` / `bibitem` 解析。
+- 新增 `PaperQualitySampleTest`，自动校验三类样例可解析、引用/参考文献存在、受保护元素被识别且无 BLOCKER lint。
+- 新增 `memory-bank/paper-quality-evaluation.md`，记录中文与英文样例的原文、三件套结果记录方式、人工评价维度与推荐文献真实可溯源核对要求。
+- 新增 `private-helper-agent/docs/paper-quality-samples/README.md`，说明样例位置、验收顺序与手动端到端记录要求。
+- 更新 `memory-bank/test-checklist.md`，增加阶段 E 论文质量专项测试清单。
+
+**验证**
+- `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，30 tests。
+- `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests；API 上下文与 Flyway V1~V9 均通过。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/test/resources/paper-quality-samples/zh-rag-polish/main.tex`
+- `private-helper-agent/yanban-paper/src/test/resources/paper-quality-samples/zh-rag-polish/refs.bib`
+- `private-helper-agent/yanban-paper/src/test/resources/paper-quality-samples/en-literature-gap/main.tex`
+- `private-helper-agent/yanban-paper/src/test/resources/paper-quality-samples/en-literature-gap/refs.bib`
+- `private-helper-agent/yanban-paper/src/test/resources/paper-quality-samples/inline-bibliography/main.tex`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/quality/PaperQualitySampleTest.java`
+- `private-helper-agent/docs/paper-quality-samples/README.md`
+- `memory-bank/paper-quality-evaluation.md`
+- `memory-bank/test-checklist.md`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+---
+
+## 2026-06-17
+
+### 修订 28：完成阶段 E 门禁核验与 F-01 阶段进度增强
+
+**问题背景**
+- E-01~E-09 已完成服务地基与离线样例集，需要先记录阶段 E 门禁核验结果，再进入阶段 F 的论文页体验增强。F-01 要求用户能看清处理阶段、当前章节和尝试次数，并保留调试日志。
+
+**修改内容**
+- 在 `memory-bank/test-checklist.md` 增加阶段 E 门禁核验记录，逐项标记 G-E1~G-E7 的验证证据与后续真编译/真实模型手测说明。
+- 扩展 `PaperSseEvent`，新增可选进度字段：`currentSection`、`totalSections`、`sectionTitle`、`attempt`、`maxAttempts`、`progressPercent`；旧事件可继续只携带基础字段。
+- 更新当前骨架 `PaperOrchestrator` 的关键事件发布，为摘要、章节、审查、文献、完成等阶段补充进度百分比、章节编号和尝试次数。
+- 论文页新增阶段链、整体进度条、章节进度、尝试次数展示。
+- 论文页将 SSE type/stage 映射为友好中文文案，同时保留折叠的原始 SSE JSON 日志用于调试。
+- 更新 `architecture.md`，记录 SSE schema 扩展与前端展示策略。
+
+**验证**
+- `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，30 tests。
+- `pnpm build`（frontend）：通过；仅 Vite chunk size warning。
+- `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperSseEvent.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperOrchestrator.java`
+- `private-helper-agent/frontend/src/api/paper.ts`
+- `private-helper-agent/frontend/src/views/PaperPage.vue`
+- `private-helper-agent/frontend/src/styles.css`
+- `memory-bank/architecture.md`
+- `memory-bank/test-checklist.md`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+---
+
+## 2026-06-17
+
+### 修订 29：完成 F-02 结构确认检查点交互 UI
+
+**问题背景**
+- E-02 已有结构确认后端地基，F-02 需要把角色识别歧义变成用户可操作的前端交互：批量问题、默认保持原样、阻塞/提示区分、提交后续跑，并允许用户手动修改章节角色。
+
+**修改内容**
+- 在 `frontend/src/api/paper.ts` 新增 clarification 与 section API 类型/函数：查询确认问题、提交答案、查询章节、更新章节角色。
+- 论文页接入 `clarification_needed` / `clarification_resolved` 事件后刷新确认问题与章节角色。
+- 新增“结构确认”面板：展示问题 message/type/相关章节序号、选项、阻塞/提示标识。
+- 默认选中“保持原样”或后端 `defaultOption`，降低误重构风险。
+- 支持“全部保持原样”批量提交、单项提交，以及非阻塞问题跳过。
+- 新增“章节角色”面板：展示章节 title、role、confidence/source，并允许下拉修改章节角色。
+- 更新 `memory-bank/test-checklist.md`，补充 F-02 手测清单。
+
+**验证**
+- `pnpm build`（frontend）：通过；仅 Vite chunk size warning。
+
+**修改文件**
+- `private-helper-agent/frontend/src/api/paper.ts`
+- `private-helper-agent/frontend/src/views/PaperPage.vue`
+- `private-helper-agent/frontend/src/styles.css`
+- `memory-bank/test-checklist.md`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+---
+
+## 2026-06-17
+
+### 修订 30：完成 F-03 在线预览与逐条采纳第一版
+
+**问题背景**
+- F-03 需要在论文页展示章节 diff、提供基础版/进阶版入口，并支持逐条采纳建议；同时需要把 A 类真实可采纳内容与 B 类骨架/批评内容区分展示，避免把无证据内容直接写入论文。
+
+**修改内容**
+- 新增 `PaperSuggestionResponse`、`PaperSuggestionStatusUpdateRequest`、`PaperArtifactResponse`。
+- 新增 `PaperPreviewService`，支持按任务查询 suggestions、计算 evidence 数量、生成 A/B 诚实分级、更新 suggestion 状态、查询 artifact 元数据。
+- `PaperController` 新增：
+  - `GET /api/v1/paper/tasks/{taskId}/suggestions`
+  - `POST /api/v1/paper/tasks/{taskId}/suggestions/{suggestionId}/status`
+  - `GET /api/v1/paper/tasks/{taskId}/artifacts`
+- 扩展 `PaperSectionResponse` 返回 `reviewJson/diffJson`，用于章节源码级 JSON 预览。
+- 前端论文页新增“在线预览与逐条采纳”面板：
+  - 基础版：只推荐，不改原文。
+  - 进阶版：改原文 + 补 cite 的预览入口。
+  - 章节 diff/review 源码 JSON 预览。
+  - A/B 诚实分级展示。
+  - A 类建议可勾选采纳；B 类只展示骨架/批评，不能直接采纳。
+  - 支持拒绝建议。
+  - 展示 suggested.bib / polished.tex artifact 版本数量。
+- 更新 `architecture.md` 与 `test-checklist.md`，记录预览/采纳接口和手测清单。
+
+**验证**
+- `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，30 tests。
+- `pnpm build`（frontend）：通过；仅 Vite chunk size warning。
+- `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperPreviewService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/web/PaperSuggestionResponse.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/web/PaperSuggestionStatusUpdateRequest.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/web/PaperArtifactResponse.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/web/PaperController.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/web/PaperSectionResponse.java`
+- `private-helper-agent/frontend/src/api/paper.ts`
+- `private-helper-agent/frontend/src/views/PaperPage.vue`
+- `private-helper-agent/frontend/src/styles.css`
+- `memory-bank/architecture.md`
+- `memory-bank/test-checklist.md`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+---
+
+## 2026-06-17
+
+### 修订 31：完成 F-04 审查报告与 suggested.bib 展示
+
+**问题背景**
+- F-04 需要在论文页展示有据可查的审查建议与推荐文献，让用户能看到每条 suggestion 的 severity、statement、真实引用来源，并对 suggested.bib 对应文献进行人工核验。
+
+**修改内容**
+- 扩展 `PaperSuggestionResponse`，新增 evidence card 详情列表，包含标题、作者、年份、venue、DOI、arXiv id、OpenAlex id、S2 id、URL、PDF、引用数。
+- `PaperPreviewService` 从 `suggestion_evidence` 与 `literature_cards` 聚合真实 evidence cards，保证展示来源仍来自已落库文献卡片。
+- 论文页新增“审查报告与 suggested.bib”面板：
+  - 展示 severity、category、track、statement。
+  - 展示真实 evidence card 链接。
+  - 无 evidence 时明确提示“禁止直接写入论文”。
+  - 展示推荐文献列表，含标题、作者、年份、venue、DOI/URL/PDF/OpenAlex 等可回溯信息。
+  - 展示 AI 辅助免责声明。
+- 更新 `architecture.md` 与 `test-checklist.md`，记录 F-04 展示策略与手测项。
+
+**验证**
+- `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，30 tests。
+- `pnpm build`（frontend）：通过；仅 Vite chunk size warning。
+- `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/web/PaperSuggestionResponse.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperPreviewService.java`
+- `private-helper-agent/frontend/src/api/paper.ts`
+- `private-helper-agent/frontend/src/views/PaperPage.vue`
+- `private-helper-agent/frontend/src/styles.css`
+- `memory-bank/architecture.md`
+- `memory-bank/test-checklist.md`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+---
+
+## 2026-06-17
+
+### 修订 32：纠正论文上传入口为 LaTeX-only
+
+**问题背景**
+- 当前第二期论文模块已明确改为 LaTeX-only，但前端上传区仍沿用早期 `.docx` 文案与单文件上传逻辑，后端创建任务接口也存在 docx 校验残留。
+
+**修改内容**
+- `PaperProcessRequest` 新增 `mainTex` 与可选 `bibFile`，保留旧 `file` 字段做短期兼容。
+- `PaperTaskService` 优先读取 `mainTex`，校验 `.tex` 必填、`.bib` 可选；上传主 tex 与 bib 文件。
+- 创建任务时设置 `inputFormat=LATEX`、`mainEntry=<tex 文件名>`、`mode=LATEX_ONLY/LATEX_BIB`。
+- 引入 `PaperTaskArtifactRepository`，将源文件登记为 `source_tex` / `source_bib` artifact。
+- 前端论文页上传 UI 改为 `.tex` 主文件必填、`.bib` 可选，FormData 字段改为 `mainTex` / `bibFile`。
+- 更新 `PaperControllerIntegrationTest`，覆盖 LaTeX 上传成功、bib 可选上传、非法扩展名拒绝。
+- 更新 `progress.md` 记录本次纠偏。
+
+**验证**
+- `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，30 tests。
+- `pnpm build`（frontend，通过 `cmd.exe /c pnpm build`）：通过；仅 Vite chunk size warning。
+- `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/web/PaperProcessRequest.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperTaskService.java`
+- `private-helper-agent/frontend/src/views/PaperPage.vue`
+- `private-helper-agent/yanban-api/src/test/java/com/yanban/api/paper/PaperControllerIntegrationTest.java`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+---
+
+## 2026-06-17
+
+### 修订 33：修复论文任务秒完成但未真实处理的问题
+
+**问题背景**
+- 用户浏览器手测发现上传 `.tex/.bib` 后约 5 秒即完成，速度明显不符合真实论文处理。
+- 排查确认 `PaperOrchestrator` 仍运行早期最小骨架流程，只发布模拟 SSE、写入占位 round，并复制原文件为 final，没有真正解析 LaTeX。
+
+**修改内容**
+- 重写 `PaperOrchestrator#runTask` 的第一版真实 LaTeX 编排入口：
+  - 读取任务主 `.tex` object key。
+  - 读取已登记的 `source_bib` artifact。
+  - 调用 `LatexParserService` 解析 LaTeX 文档。
+  - 调用 `LatexRoleRecognitionService` 识别章节角色与结构确认候选。
+  - 将真实章节保存到 `paper_sections`。
+  - 为每个原始章节保存 `section_original` artifact。
+  - 存在阻塞确认项时进入 `WAITING_INPUT` 并发布 `clarification_needed`，不再假完成。
+  - 无阻塞确认项时调用 `PaperAssembleService` 生成基础版 `suggested_bib` 与 `review_report`。
+- 扩展 `PaperSectionRepository` 增加按任务删除章节的方法，供重新解析/重跑时清理旧章节使用。
+- 增强 `PaperStorageService`：
+  - MinIO 写入后继续保留本地备份。
+  - MinIO 读取失败或返回空时回退本地文件，避免 mocked MinIO 和本地开发场景读不到源文件。
+
+**验证**
+- `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，30 tests。
+- `pnpm build`（frontend，通过 `cmd.exe /c pnpm build`）：通过；仅 Vite chunk size warning。
+- `mvn -pl yanban-api -am -Dtest=PaperControllerIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`：通过，2 tests。
+- `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperOrchestrator.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/PaperSectionRepository.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperStorageService.java`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+---
+
+## 2026-06-17
+
+### 修订 34：修复结构确认后 RUNNING 但不继续推进
+
+**问题背景**
+- 用户反馈结构确认提交后页面显示 `RUNNING`，但任务实际不再推进。
+- 排查确认：阻塞确认触发时异步编排线程已结束；确认全部回答后只更新状态，没有重新启动编排线程。
+
+**修改内容**
+- `PaperClarificationService`：最后一个 `PENDING` clarification 被回答后，将任务切回 `RUNNING/STRUCTURE_CHECK`，并在事务提交后调用 `PaperOrchestrator#startTask(taskId)` 自动续跑。
+- `PaperOrchestrator`：续跑时检查任务已有 clarification：
+  - 没有历史 clarification 时，按识别结果创建 pending clarification。
+  - 仍有 pending clarification 时，保持等待输入并返回。
+  - 所有 clarification 已回答时，不再重复创建问题，继续进入后续基础组装。
+- 新增 `clarification_resolved` 进度事件，便于前端看到结构确认完成后任务继续处理。
+
+**验证**
+- `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，30 tests。
+- `mvn -pl yanban-api -am -Dtest=PaperControllerIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`：通过，2 tests。
+- `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperClarificationService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperOrchestrator.java`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+---
+
+## 2026-06-17
+
+### 修订 35：修复结构确认续跑时 round 唯一键冲突
+
+**问题背景**
+- 结构确认后自动续跑重新进入 `PARSE` 阶段，再次插入 `paper_task_rounds(task_id, round_number, stage)=(4,1,PARSE)`。
+- 数据库唯一索引 `paper_task_rounds.uk_paper_task_rounds_task_round` 拒绝重复插入，导致任务失败并把 SQL 异常直接展示到前端。
+
+**修改内容**
+- `PaperTaskRoundRepository` 新增 `findByTaskIdAndRoundNumberAndStage`。
+- `PaperTaskRound` 新增 `setStatus/setInputText/setOutputText/setNotes`。
+- `PaperOrchestrator#persistRound` 改为 upsert：
+  - 已存在相同任务/轮次/阶段 round 时更新内容。
+  - 不存在时才创建新 round。
+
+**验证**
+- `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，30 tests。
+- `mvn -pl yanban-api -am -Dtest=PaperControllerIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`：通过，2 tests。
+- `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/PaperTaskRound.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/PaperTaskRoundRepository.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperOrchestrator.java`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+---
+
+## 2026-06-17
+
+### 修订 36：修复第二阶段完成后结果文件不可下载
+
+**问题背景**
+- 第二阶段基础版完成后会生成 `suggested_bib` / `review_report` artifacts，但不一定生成 `paper_tasks.final_object_key`。
+- 前端“下载结果文件”按钮只依赖 `finalObjectKey`，导致页面显示“尚未生成”且按钮禁用。
+
+**修改内容**
+- `PaperTaskService#downloadResult`：
+  - 有 `finalObjectKey` 时继续下载最终 tex。
+  - 无 `finalObjectKey` 但存在 `polished_tex` / `suggested_bib` / `review_report` artifacts 时，动态打包 zip 返回。
+- `PaperTaskService` 新增下载文件名与 content-type 判断：
+  - artifacts 三件套返回 `<source>-artifacts.zip` / `application/zip`。
+  - final tex 返回 tex 文件名 / `application/x-tex`。
+- `PaperController#download` 使用服务层返回的文件名与 content-type，不再硬编码 docx 类型。
+- 前端论文页：
+  - 下载按钮启用条件扩展为 `finalObjectKey` 或可下载 artifacts 存在。
+  - 结果文件文案在 artifacts 存在时显示“已生成 N 个产物，可下载 zip”。
+
+**验证**
+- `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，30 tests。
+- `pnpm build`：通过，仅 Vite chunk size warning。
+- `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperTaskService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/web/PaperController.java`
+- `private-helper-agent/frontend/src/views/PaperPage.vue`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+---
+
+## 2026-06-22
+
+### 修订 37：串联真实论文处理主流程，修复空推荐/空建议产物
+
+**问题背景**
+- 用户下载第二阶段产物后，`suggested.bib` 为空，`review-report.md` 显示所有章节 `PENDING`，并提示 `No suggestions generated`。
+- 原因是当前编排只跑到 LaTeX 解析、章节识别、结构确认和基础组装，没有执行真实文献检索、Gap 分析和分章润色。
+
+**修改内容**
+- `PaperOrchestrator`：
+  - 在结构确认后继续执行 `PROFILE`、`RETRIEVE`、`GAP_ANALYSIS`、`POLISH`、高级 `ASSEMBLE`。
+  - 发布对应 SSE 进度事件，并持久化阶段 round。
+  - 最终调用 `assemble(..., true)` 生成完整三件套。
+- `PaperResearchProfileService`：
+  - 模型调用失败或返回空画像时，从论文标题和章节标题生成降级研究画像，保证检索 query 不为空。
+- `LiteratureService`：
+  - 单个检索源异常时跳过该源，避免 OpenAlex/arXiv 某一路网络失败导致整个任务失败。
+- `PaperGapAnalysisService`：
+  - 模型无建议但已有真实 selected literature cards 时，生成保守兜底建议，并绑定真实 evidence card。
+  - 保证报告不再是空建议，同时 `suggested.bib` 可从 grounded ADVOCACY 建议生成。
+- `PaperSectionPolishService`：
+  - 分章润色结果改为写入真实 artifact 存储，不再使用不可读取的 `memory://` 占位。
+- `PaperTaskService` / `PaperPage.vue`：
+  - 下载结果改为 artifacts 优先打包 zip，避免高级流程存在 `finalObjectKey` 时只能下载单个 tex。
+  - 前端结果文件文案同步显示 zip 产物数量。
+
+**验证**
+- `mvn -pl yanban-paper test`：通过，30 tests。
+- `mvn -pl yanban-api -am -Dtest=PaperControllerIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`：通过，2 tests。
+- `pnpm build`：通过，仅 Vite chunk size warning。
+- `mvn test`：通过，28 tests。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperOrchestrator.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperResearchProfileService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/literature/LiteratureService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperGapAnalysisService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperSectionPolishService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperTaskService.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/service/PaperSectionPolishServiceTest.java`
+- `private-helper-agent/frontend/src/views/PaperPage.vue`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+- `memory-bank/test-checklist.md`
+
+---
+
+## 2026-06-22
+
+### 修订 38：接入 LLM 章节角色复核并修复 References 误判
+
+**问题背景**
+- 用户指出设计中已明确要求“启发式 → LLM 复核 → 用户可改”，但实际产物中 `Subproblem 3: SDP-Based Reference Beampattern Shaping` 被误判为 `REFERENCES` 并跳过润色。
+- 排查发现当前 `LatexRoleRecognitionService` 只沿用 parser heuristic，`role-confirm.md` prompt 尚未接入主链路。
+
+**修改内容**
+- `LatexParserService`：
+  - References 判断从 `contains("reference")` 改为严格标题匹配。
+  - 避免 `reference beampattern` / `reference signal` / `reference model` 等正文标题被误判为参考文献章节。
+- `LatexRoleRecognitionService`：
+  - 注入 `PaperPromptService`、`PaperModelClient`、`ObjectMapper`。
+  - 可用模型时调用 `role-confirm` prompt 做章节角色复核。
+  - 模型不可用、调用失败、JSON 无效时自动降级 heuristic。
+  - 输出角色限定在 `LatexSectionRole` 枚举内。
+  - 增加 References 安全闸门：LLM 返回 `REFERENCES` 时，仍要求标题严格匹配 References/Bibliography/参考文献才采纳。
+- `LiteratureService`：
+  - 在 `concept_ladder_json` 写入检索诊断：queries、sourceAttempts、sourceFailures、rawCandidateCount、uniqueCandidateCount、selectedCount。
+- `PaperAssembleService`：
+  - `review-report.md` 增加 `Retrieval Diagnostics`，避免 `suggested.bib` 为空时无从定位。
+- 测试：
+  - 新增 `referenceBeampatternIsNotReferencesSection` 回归测试。
+
+**验证**
+- `mvn -pl yanban-paper test`：通过，31 tests。
+- `mvn -pl yanban-api -am -Dtest=PaperControllerIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`：通过，2 tests。
+- `mvn test`：通过，28 tests。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/latex/LatexParserService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/latex/LatexRoleRecognitionService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/literature/LiteratureService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperAssembleService.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/latex/LatexRoleRecognitionServiceTest.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/service/PaperAssembleServiceTest.java`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+---
+
 ## 后续维护方式
 
 以后每次修改，请继续按下面格式追加：
@@ -376,3 +1073,189 @@
 - `路径/文件A`
 - `路径/文件B`
 ```
+
+## 2026-06-24
+
+### 修订 39：修复 LaTeX 组装重复结束标记并增强文献 query / bib 推荐兜底
+
+**问题背景**
+- 浏览器手测下载的真实 `polished.tex` 出现重复 `\\end{document}`，阻断编译。
+- `suggested.bib` 只包含少量 Gap evidence，selected 候选较多时仍可能推荐过少。
+- 文献检索 query 由代码拼接，缺少面向搜索策略的 LLM 规划。
+
+**修改内容**
+- 新增 `literature-search-query.md` prompt 和 `LiteratureQueryPlanner`，实现 LLM query 规划 + 规则 fallback。
+- `LiteratureService` 接入 query planner，使用任务标题、目标语言与研究画像生成检索 query。
+- `PaperAssembleService` 拼接章节前剥离尾部 `\\end{document}`，保证最终 tex 只保留一个结束标记。
+- `suggested.bib` 在 Gap evidence 不足时补入 selected 高相关真实文献卡片；`review-report.md` 增加补充候选区，明确弱推荐与人工核验要求。
+- `PaperAssembleServiceTest` 增加重复 `\\end{document}` 回归断言。
+
+**验证**
+- `mvn -pl yanban-paper test`：通过，31 tests。
+- `mvn -pl yanban-api -am -Dtest=PaperControllerIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`：通过，2 tests。
+- `mvn test`：通过，28 tests。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/resources/prompts/literature-search-query.md`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/literature/LiteratureQueryPlanner.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/literature/LiteratureService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperAssembleService.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/literature/LiteratureServiceTest.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/service/PaperAssembleServiceTest.java`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+## 2026-06-24
+
+### 修订 40：保留 LaTeX front matter、禁止模型改写结构命令、过滤低相关补充 bib
+
+**问题背景**
+- 复核用户真实产物 `IEEE_TAES_regular_template_latex_v6-artifacts (4)` 发现：
+  - `polished.tex` 虽只剩 1 个 `\\end{document}`，但丢失了标题、作者、摘要和关键词。
+  - 模型改写了 `\\label{}` / `\\ref{}` 名称，产生潜在 undefined reference。
+  - `suggested.bib` 中 supplemental 弱推荐混入 CP2K、6G、O-RAN 等明显低相关文献。
+
+**修改内容**
+- `LatexDocument` 增加 `frontMatter` 字段。
+- `LatexParserService` 提取 `\\begin{document}` 到第一个章节之间的 front matter，并用于标题/作者/关键词元数据抽取。
+- `PaperAssembleService` 组装最终 tex 时保留 front matter。
+- `PaperSectionPolishService` 增加结构命令不变量校验，禁止模型新增、删除或改写 `cite/ref/label/includegraphics/bibliography` 等结构命令。
+- `PaperAssembleService` 增加 `REF_WITHOUT_LABEL` lint，检测最终 tex 的未定义引用目标。
+- supplemental bib 增加相关性最低阈值，避免低分弱相关 selected 候选进入推荐 bib。
+- 增加/更新回归测试：front matter 保留、结构命令变化拒绝、重复 `\\end{document}` 保持 1 次。
+
+**验证**
+- `mvn -pl yanban-paper test`：通过，32 tests。
+- `mvn -pl yanban-api -am -Dtest=PaperControllerIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`：通过，2 tests。
+- `mvn test`：通过，28 tests。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/latex/LatexDocument.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/latex/LatexParserService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperAssembleService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperSectionPolishService.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/service/PaperAssembleServiceTest.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/service/PaperSectionPolishServiceTest.java`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+## 2026-06-24
+
+### 修订 41：论文页结果中心 Tabs 化与右侧滚动布局优化
+
+**问题背景**
+- 论文页右侧结果下载区域承载结构确认、章节角色、预览采纳、审查报告等大量内容。
+- 当章节较多时，右侧区域会被拉成很长一列，视觉拥挤且不利于定位结果下载按钮。
+
+**修改内容**
+- 将右侧“结果下载”重构为“结果中心”。
+- 顶部新增下载状态条，集中显示产物状态、原始文件与下载按钮。
+- 使用 Tabs 拆分：总览、结构、章节、预览、报告。
+- Tab 内容区固定高度并内部滚动，避免长章节列表撑高整页。
+- 调整三栏比例：左侧 `l:7`、中间 `l:10`、右侧 `l:7`。
+- 新增结果中心相关样式与移动端响应式规则。
+
+**验证**
+- `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅 Vite chunk size warning。
+
+**修改文件**
+- `private-helper-agent/frontend/src/views/PaperPage.vue`
+- `private-helper-agent/frontend/src/styles.css`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+## 2026-06-24
+
+### 修订 42：新增 retrieved-literature 检索诊断产物
+
+**问题背景**
+- `suggested.bib` 只展示 Gap 模型最终挑选的少量 evidence，不能反映检索系统 raw/unique/selected 三层质量。
+- 当前需要先评估文献检索系统本身，为后续对话中直接检索文献打基础。
+
+**修改内容**
+- `LiteratureService` 新增检索诊断 artifact 输出：
+  - `retrieved-literature.json`：完整保留 queries、sourceAttempts、rawCandidates、uniqueCandidates、rankedCandidates、selectedCandidates。
+  - `retrieved-literature.md`：人工可读摘要，便于快速查看 query 与排序候选。
+- rawCandidates 保留 API 原始返回，不去重；unique/ranked/selected 仍展示去重和排序链路。
+- `PaperTaskService` 下载 zip 支持打包 `retrieved_literature_json` 与 `retrieved_literature_md`。
+- 前端论文页结果中心同步统计 retrieved-literature 诊断文件。
+- 更新 `LiteratureServiceTest` 覆盖诊断 artifacts 写入。
+
+**验证**
+- `mvn -pl yanban-paper test`：通过，32 tests。
+- `mvn -pl yanban-api -am -Dtest=PaperControllerIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`：通过，2 tests。
+- `mvn test`：通过，28 tests。
+- `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅 Vite chunk size warning。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/literature/LiteratureService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperTaskService.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/literature/LiteratureServiceTest.java`
+- `private-helper-agent/frontend/src/views/PaperPage.vue`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+### 修订 43：修复论文任务首次上传后首轮异步启动易 FAILED
+
+**问题背景**
+- 用户反馈第一次上传 `.tex` 与 `.bib` 后开始处理会显示 `FAILED`，第二次重新上传同样文件才开始真正执行。
+- 该问题符合异步任务首启时序/存储读取瞬时失败特征：第一次启动如果源文件或 bib 读取失败会直接进入 FAILED，第二次因资源已热身而成功。
+
+**修改内容**
+- `PaperOrchestrator#startTask` 增加 taskId 级运行去重，防止同一任务被重复异步启动。
+- 新增 `readStorageWithRetry`：源文件读取支持 3 次重试，并输出带 taskId/objectKey/attempt 的 warn 日志。
+- 主 `.tex` 使用重试读取；重试失败才进入 FAILED，并给出明确 source_tex 错误。
+- `.bib` 使用重试读取；重试失败时不再终止整篇任务，而是跳过 bib、发布 `bib_read_skipped` 事件并继续执行。
+
+**验证**
+- `mvn -pl yanban-paper test`：通过，32 tests。
+- `mvn -pl yanban-api -am -Dtest=PaperControllerIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`：通过，2 tests。
+- `mvn test`：通过，28 tests。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperOrchestrator.java`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`
+
+## 2026-06-29
+
+### 修订 44：记录 LaTeX 文献推荐链路阶段性修复与剩余质量问题
+
+**问题背景**
+- 连续测试 `IEEE_TAES_regular_template_latex_v6-artifacts (12) ~ (20)` 暴露出文献推荐链路多个问题：推荐数量固定、Introduction Analysis fallback、LLM JSON 截断、query 过宽、`suggested.bib` 与上传 `.bib` 去重不生效、FDA-MIMO jamming 方向过度集中、泛化文献混入。
+
+**已完成修复摘要**
+- 将文献推荐数量从单值扩展为范围：`literatureMinCount` / `literatureCount`。
+- Introduction Analysis 从单次大 JSON 调用改为多次 API 调用：plan / slots / audit 分别生成后合并。
+- 报告新增 Introduction Analysis Diagnostics，能定位 fallback 原因、slot 数量、raw preview。
+- `retrieved-literature.json/md` 保留 raw / unique / ranked / selected 多层诊断。
+- `suggested.bib` 与 `suggested-novel.bib` 分离，后者用于排除上传 bib 已有文献。
+- 修复 `.bib` parser 对嵌套花括号字段解析不完整的问题，已有文献去重开始生效。
+- 增加 balanced selection 与弱泛化过滤，降低单一主题占满与泛化候选入选概率。
+
+**当前验证结论**
+- `artifacts (20)` 中 Introduction Analysis 已正常成功：`generatedBy=introduction-analysis-v1`、`degraded=false`、`Raw LLM slot count=14`、`Fallback-added slot count=0`。
+- 上传 `.bib` 解析数为 35，已识别 4 条 already-present，`suggested-novel.bib` 输出 22 条新增推荐。
+- 推荐结果比早期版本明显更均衡，但仍有少量 DFRC/通信/OTFS/泛 MIMO/泛波形类弱相关文献，需要后续精排。
+
+**后续待处理**
+- 增加最终 LLM relevance filter / slot-aware rerank，降低泛化文献比例。
+- 在报告中输出每篇推荐对应的 citation slot、supportStrength、useAs。
+- 增强多版本/近重复去重。
+
+**修改文件（本阶段涉及）**
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperIntroductionAnalysisService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/literature/LiteratureService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/literature/LiteratureRerankService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperAssembleService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/latex/LatexParserService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/domain/PaperTask.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/web/PaperProcessRequest.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/web/PaperTaskResponse.java`
+- `private-helper-agent/yanban-api/src/main/resources/db/migration/V11__add_literature_min_count_to_paper_tasks.sql`
+- `private-helper-agent/frontend/src/views/PaperPage.vue`
+- `private-helper-agent/frontend/src/api/paper.ts`
+- `private-helper-agent/yanban-paper/src/main/resources/prompts/introduction-analysis.md`
+- `private-helper-agent/yanban-paper/src/main/resources/prompts/literature-rerank.md`
+- `memory-bank/progress.md`
+- `memory-bank/revision-log.md`

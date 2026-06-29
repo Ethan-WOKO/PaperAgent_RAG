@@ -17,6 +17,7 @@ public record PaperTaskResponse(
         Integer scoreThreshold,
         Integer maxRounds,
         Integer innerMaxAttempts,
+        Integer literatureMinCount,
         Integer literatureCount,
         Instant createdAt,
         Instant updatedAt
@@ -40,6 +41,7 @@ public record PaperTaskResponse(
                 scoreThreshold,
                 maxRounds,
                 innerMaxAttempts,
+                task.getLiteratureMinCount(),
                 literatureCount,
                 task.getCreatedAt(),
                 task.getUpdatedAt()

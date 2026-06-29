@@ -1327,13 +1327,487 @@ cmd.exe /c "cd /d C:\\java_file\\private_helper_Agent\\private-helper-agent && s
 - 当前说明：
   - 登录 / 注册页已与主应用工作台视觉语言保持一致；仍建议浏览器手动确认登录、注册、跳转流程。
 
+### E-01：LaTeX 解析与文档模型（L0 / PARSE）
+
+- 状态：✅ 已完成第一版代码地基
+- 本次处理：
+  - 新增 Flyway `V9__create_latex_paper_tables.sql`：扩展 `paper_tasks`（input_format/mode/main_entry），新增 `literature_cards`、`paper_sections`、`paper_task_analysis`、`paper_task_artifacts`、`paper_task_clarifications`、`paper_task_literature`、`suggestions`、`suggestion_evidence`。
+  - 扩展 `PaperTask` 实体，新增 `PaperSection` / `PaperSectionRepository`。
+  - 新增 `LatexParserService` 与 L0 文档模型 record：`LatexDocument`、`LatexSection`、`LatexProtectedSpan`、`LatexFloat`、`LatexCitationUsage`、`LatexCrossReference`、`LatexBibEntry`、`LatexLintIssue`。
+  - 支持单文件 `.tex` 解析：preamble 元数据（title/authors/keywords）、sections、cite/ref/label/includegraphics、figure/table、数学与受保护环境、外部 `.bib` 与内联 `thebibliography`。
+  - 硬 lint 第一版：悬空 cite、断 ref、begin/end 不配平、花括号不配平、重复 bib key。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，5 tests。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests；Flyway V1~V9 在 H2 MySQL mode 下可迁移。
+- 当前说明：
+  - E-01 暂不接前端/API；按约定先完成后端服务与自动测试地基。
+  - 第一版解析器是务实分词器，未实现完整 LaTeX 语法；多文件精确写回、真编译、equations[] 一等实体仍后置。
+
+### E-02：角色识别 + 结构确认检查点（L0 / ROLE_RECOGNITION + STRUCTURE_CHECK）
+
+- 状态：✅ 已完成第一版后端地基
+- 本次处理：
+  - 新增 `LatexRoleRecognitionService`：基于 E-01 文档模型做启发式角色识别，输出 `RecognizedSectionRole`、`RoleRecognitionResult`、`missingRoles`。
+  - 新增结构歧义检测：当无显式 Related Work 章节但 Introduction 中存在引用密集/相关工作线索时，生成 `RELATED_WORK_PLACEMENT` 阻塞型确认问题，默认 `KEEP_IN_INTRO`。
+  - 新增 `PaperTaskClarification` / `PaperTaskClarificationRepository` / `PaperClarificationService`：可创建 pending clarification，阻塞型问题将任务置为 `WAITING_INPUT` + `STRUCTURE_CHECK`，回答后若无 pending 则恢复 `RUNNING`。
+  - 新增 SSE 事件：`clarification_needed`、`clarification_resolved`。
+  - 新增 `PaperSectionService` 与用户改角色 API：支持列出任务章节、按枚举校验后把章节角色改为用户指定值，并标记 `role_source=user`、`role_confidence=1.0`。
+  - `PaperController` 新增章节与 clarification 相关端点。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，7 tests。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests；API 自动装配、新 repository 扫描、Flyway V1~V9 均通过。
+- 当前说明：
+  - 真实 LLM 角色复核 prompt 仍在 E-03 接入；E-02 先完成启发式 + 用户确认/改角色 + WAITING_INPUT 持久化地基。
+  - 当前 orchestration 还未把 PARSE→ROLE→STRUCTURE_CHECK 串入真实 pipeline，后续步骤继续接入。
+
+### E-03：Prompt 资源体系化
+
+- 状态：✅ 已完成第一版 prompt 资源与渲染服务
+- 本次处理：
+  - 新增 `yanban-paper/src/main/resources/prompts/` 资源目录。
+  - 新增 9 个 prompt 文件：`role-confirm`、`research-profile`、`section-polish`、`section-review`、`literature-extract`、`gap-analysis`、`relatedwork-gen`、`contribution-gen`、`abstract`。
+  - Prompt 内容已覆盖公共守则：限定角色枚举、不编实验/数据/引用、只从候选文献选 evidence、占位符保留、polish/review 分离、Suggestion JSON、L3c 文献抽取 JSON。
+  - 新增 `PaperPromptTemplate` 与 `PaperPromptService`：从 classpath `prompts/*.md` 加载模板，提取 `{{变量}}` 必填集合，渲染时缺变量快速报错，支持简单 Iterable 渲染。
+  - 新增 `PaperPromptServiceTest` 覆盖：预期模板加载、变量替换、缺必填变量报错、未知 prompt 报错。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，11 tests。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests；API 资源加载与自动装配未受影响。
+- 当前说明：
+  - E-03 只完成 prompt 资源化和模板渲染，不在本步接真实 LLM 调用。
+  - 后续 E-04 可复用 `research-profile` prompt 生成结构化研究画像。
+
+### E-04：结构化研究画像（L3 种子 / PROFILE）
+
+- 状态：✅ 已完成第一版服务地基
+- 本次处理：
+  - 新增 `PaperTaskAnalysis` / `PaperTaskAnalysisRepository`，对应 `paper_task_analysis` 表，持久化 `research_profile_json`。
+  - 新增 `ResearchProfileResult`，字段覆盖 problem/method/contributions/datasets/baselines/metrics/tasks/keywords，并带 `degraded` 与 `rawText`。
+  - 新增 `PaperResearchProfileService`：使用 `research-profile` prompt，基于 `LatexDocument.sections` 生成 sectionSummaries，调用模型生成研究画像，解析 JSON 并写入 `paper_task_analysis`。
+  - JSON 解析失败时不阻断任务，返回 degraded 结果并保留 rawText。
+  - 为保持 `yanban-paper` 模块解耦，新增 `PaperModelClient` 轻量接口；在 `yanban-api` 中新增 `PaperModelClientConfig`，用现有 `ChatModelProvider` 适配。
+  - 更新 repository 测试覆盖 `paper_task_analysis`，新增 `PaperResearchProfileServiceTest` 覆盖有效 JSON、非 JSON 降级、生成并保存画像。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，14 tests。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests；API 适配器装配正常。
+- 当前说明：
+  - E-04 已具备 PROFILE 阶段的服务地基，但尚未接入真实编排阶段链。
+  - 后续 E-05 将基于研究画像进入文献检索与卡片地基。
+
+### E-05：文献检索与卡片地基（L3 / RETRIEVE）
+
+- 状态：✅ 已完成第一版服务地基
+- 本次处理：
+  - 新增 `LiteratureCard` / `LiteratureCardRepository` 与 `PaperTaskLiterature` / `PaperTaskLiteratureRepository`，对应全局文献卡片与任务-文献关联。
+  - 新增 `LiteratureSource` 抽象与第一版 OpenAlex、arXiv provider，OpenAlex 解析 work JSON 与 inverted abstract，arXiv 解析 Atom XML。
+  - 新增 `LiteratureService`：从 `ResearchProfileResult` 生成多 query，跨 provider 检索，按 DOI / arXiv id / OpenAlex id / S2 id / title hash 去重，写入 `literature_cards` 与 `paper_task_literature`。
+  - 完成简版相关性排序：关键词、任务、problem/method 命中、引用量、年份轻权重；第一版 narrative_role 分为 advocacy / critique。
+  - 完成简版 L3c 卡片分析：无 LLM 时基于摘要规则写 `analysis_json`，标记 `rule-based-l3c-v1`，后续可升级为 `literature-extract` prompt。
+  - 完成概念阶梯第一版：将选中文献按 advocacy / critique 写入 `paper_task_analysis.concept_ladder_json`。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，18 tests。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests；API 上下文与 Flyway V1~V9 均通过。
+- 当前说明：
+  - E-05 暂不接 Elasticsearch / embedding，保持 `yanban-paper` 独立；语义相似度与 MMR 深化、真实 LLM L3c、RETRIEVE SSE checkpoint 将在编排接入时继续增强。
+  - 目前服务确保“推荐均来自真实 provider 返回候选”，不允许模型凭空补引用。
+
+### E-06：gap 分析与建议生成（L4 / GAP_ANALYSIS）
+
+- 状态：✅ 已完成第一版服务地基
+- 本次处理：
+  - 新增 `Suggestion` / `SuggestionRepository` 与 `SuggestionEvidence` / `SuggestionEvidenceRepository` / `SuggestionEvidenceId`，对应 `suggestions` 与 `suggestion_evidence` 表。
+  - 新增 `GapSuggestionResult` 与 `PaperGapAnalysisService`：读取任务、研究画像、已选文献卡片，渲染 `gap-analysis` prompt，调用模型生成建议 JSON。
+  - 实现 Suggestion JSON 解析与落库：track/category/severity/statement/evidence/applicable/patch。
+  - 实现 grounding 校验：evidence 只允许引用当前任务已选真实文献卡片；模型引用不存在卡片会被丢弃。
+  - 实现诚实闸门第一版：无真实 evidence 的 ADVOCACY 自动转 CRITIQUE，applicable=false，patch 清空，避免无支撑内容进入 LaTeX 补丁。
+  - 将生成结果摘要写入 `paper_task_analysis.gap_matrix_json`；补齐实体 JSON 字段长度，避免测试 DDL 255 长度与 Flyway LONGTEXT 意图不一致。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，20 tests。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests；API 上下文、Flyway V1~V9 与新增 repository 扫描均通过。
+- 当前说明：
+  - E-06 暂未接真实编排 SSE 与 LaTeX patch 应用；当前重点是确保建议和 evidence 持久化、grounding 校验、防幻觉闸门可测试。
+  - 后续 E-07 可在此基础上做占位保护润色与 patch 组装。
+
+### E-07：占位保护分章润色（L1/L2 / POLISH）
+
+- 状态：✅ 已完成第一版服务地基
+- 本次处理：
+  - 新增 `LatexMaskingService` 与 `MaskedLatexText`：保护 cite/ref/label/includegraphics、数学片段与重点环境，生成 `[[YANBAN_*_0001]]` 占位符，支持 unmask 与占位符集合校验。
+  - 新增静态 lint 第一版：捕获花括号不配平、环境 begin/end 不配平、unmask 后残留占位符。
+  - 新增 `SectionPolishResult` 与 `PaperSectionPolishService`：逐章 mask → `section-polish` prompt → 占位符校验 → unmask → lint → `section-review` prompt。
+  - 实现 retry 策略：掉占位或 lint blocker 会拒绝当次输出并带原因重试；review 低分在未达最大轮次时带审查意见重试；仍失败则保留原章节。
+  - 对 References 角色默认跳过润色；成功或失败结果写回 `paper_sections.polish_status/review_json/diff_json`，并记录内存型 object key 占位。
+  - 补齐 `PaperSection.reviewJson/diffJson` 长度，保持测试 DDL 与 Flyway LONGTEXT 设计一致。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，25 tests。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests；API 上下文与 Flyway V1~V9 均通过。
+- 当前说明：
+  - E-07 暂未接真实编排 SSE、MinIO 正式对象存储、超长章节切块和 Abstract 专用 prompt；当前先完成可测试的占位保护、review 回环和章节状态落库地基。
+  - 后续 E-08 可基于 `paper_sections` 的 polish/review/diff 状态进入三件套组装。
+
+### E-08：三件套产出（ASSEMBLE）
+
+- 状态：✅ 已完成第一版服务地基
+- 本次处理：
+  - 新增 `PaperTaskArtifact` / `PaperTaskArtifactRepository`，对应 `paper_task_artifacts` 表，支持按 task/type/version 查询产物。
+  - 扩展 `PaperStorageService#storeArtifact`，支持保存 `.tex`、`.bib`、Markdown report 等任意论文产物。
+  - 新增 `PaperAssembleResult` 与 `PaperAssembleService`：从 `LatexDocument`、`paper_sections`、`suggestions`、`suggestion_evidence`、`literature_cards` 组装三件套。
+  - 基础版：产出 `suggested_bib` 与 `review_report`，不改原文。
+  - 进阶版：额外产出 `polished_tex`，第一版按章节顺序拼接可用润色文本/原文，并写入 `paper_tasks.final_object_key`。
+  - `suggested.bib` 只从真实 evidence 文献卡片生成，自动避让原 bib key；审查报告按章节状态、Suggestion 与 evidence 输出，并附 AI 自查免责声明。
+  - 进阶版增加静态校验第一版：复用 LaTeX lint，并标记原 bib 缺失的 cite key。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，27 tests。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests；API 上下文、Flyway V1~V9 与新增 repository 扫描均通过。
+- 当前说明：
+  - E-08 仍未接真实前端下载链路与用户逐条采纳 patch；进阶版 patch 精确改写、多文件写回、真编译仍后置。
+  - 当前已形成可落库、可存储、可测试的三件套组装地基。
+
+### E-09：论文质量样例集与评价记录
+
+- 状态：✅ 已完成离线验收资产与自动化检查
+- 本次处理：
+  - 新增中文 LaTeX 样例 `zh-rag-polish`：包含 `main.tex` + `refs.bib`，覆盖中文章节、cite/ref/figure/math、RAG 论文常见表达。
+  - 新增英文 LaTeX 样例 `en-literature-gap`：包含 `main.tex` + `refs.bib`，覆盖 Abstract/Introduction/Method/Discussion/Conclusion、equation/ref/math 与 grounded writing 主题。
+  - 新增无 `.bib` 内联 bibliography 样例 `inline-bibliography`：覆盖 legacy `thebibliography` / `bibitem` 解析场景。
+  - 新增 `memory-bank/paper-quality-evaluation.md`：记录中文与英文样例的原文、三件套结果记录方式、人工评价维度、推荐文献真实可溯源核对要求。
+  - 新增 `private-helper-agent/docs/paper-quality-samples/README.md`：说明样例位置、验收顺序与手动端到端记录要求。
+  - 更新 `memory-bank/test-checklist.md`：增加阶段 E 论文质量专项测试清单。
+  - 新增 `PaperQualitySampleTest`：自动校验中文、英文、内联 bibliography 三类样例可解析且无 BLOCKER lint。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，30 tests。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests；API 上下文与 Flyway V1~V9 均通过。
+- 当前说明：
+  - E-09 已建立可重复对比的离线样例与评价记录模板；真实前端/模型端到端 artifact object key、模型 provider、检索源和人工评分仍需在后续阶段 E 门禁/阶段 F 手测时补充。
+
+### 阶段 E 门禁核验
+
+- 状态：✅ 后端/离线自动化门禁已通过，真实端到端手测项后续补充
+- 本次处理：
+  - 在 `memory-bank/test-checklist.md` 增加阶段 E 门禁核验表，对 G-E1~G-E7 逐项记录证据。
+  - G-E1~G-E6 均已有自动化测试覆盖；G-E7 三件套服务地基通过自动化，VSCode/latexmk 真编译作为后续手测项保留。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，30 tests。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+
+### F-01：阶段进度增强
+
+- 状态：✅ 已完成第一版前后端展示增强
+- 本次处理：
+  - 扩展 `PaperSseEvent` 可选进度字段：`currentSection/totalSections/sectionTitle/attempt/maxAttempts/progressPercent`，旧事件仍兼容。
+  - 当前骨架编排 `PaperOrchestrator` 发布关键事件时补充进度百分比、章节编号与尝试次数。
+  - 论文页新增阶段链展示：解析、结构确认、画像、文献、Gap、润色、组装、完成。
+  - 论文页新增整体进度条、章节进度、尝试次数展示。
+  - 论文页将 SSE 事件类型和阶段映射为友好中文文案。
+  - 论文页保留折叠的原始 SSE JSON 日志，方便调试。
+  - 更新 `architecture.md` 记录 SSE 事件结构扩展与前端展示策略。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，30 tests。
+  - `pnpm build`（frontend）：通过；仅 Vite chunk size warning。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+- 当前说明：
+  - 当前进度字段先接入既有骨架编排；后续真实 LaTeX 流水线接入编排时，可直接复用同一 SSE schema 上报真实章节总数、当前章节和尝试次数。
+
+### F-02：结构确认检查点交互 UI
+
+- 状态：✅ 已完成前端第一版
+- 本次处理：
+  - 在 `frontend/src/api/paper.ts` 新增 clarification 与 section API：查询确认问题、提交答案、查询章节、更新章节角色。
+  - 论文页接入 `clarification_needed` / `clarification_resolved` 事件后刷新确认问题与章节角色。
+  - 新增“结构确认”面板：批量展示问题、选项、阻塞/提示标识，默认选中“保持原样”或后端 `defaultOption`。
+  - 支持“全部保持原样”批量提交；支持单项提交；非阻塞问题支持跳过。
+  - 新增“章节角色”面板：展示章节 title、role、confidence/source，并允许下拉修改角色。
+  - 更新 `test-checklist.md`，补充 F-02 手测步骤。
+- 已执行验证：
+  - `pnpm build`（frontend）：通过；仅 Vite chunk size warning。
+- 当前说明：
+  - F-02 当前完成 UI/API 接入；真实歧义任务端到端触发、批量确认后续跑与角色修改体验仍需浏览器手测。
+
+### F-03：在线预览 + 逐条采纳
+
+- 状态：✅ 已完成第一版预览与采纳状态闭环
+- 本次处理：
+  - 新增 `PaperSuggestionResponse`、`PaperSuggestionStatusUpdateRequest`、`PaperArtifactResponse`。
+  - 新增 `PaperPreviewService`：按任务读取 suggestions、计算 evidence 数量、生成 A/B 诚实分级、更新 suggestion 状态、读取 artifact 元数据。
+  - `PaperController` 新增接口：`GET /suggestions`、`POST /suggestions/{id}/status`、`GET /artifacts`。
+  - 扩展 `PaperSectionResponse` 返回 `reviewJson/diffJson`，用于章节源码级 JSON 预览。
+  - 前端论文页新增“在线预览与逐条采纳”面板：基础版/进阶版切换、章节 diff/review 预览、A/B 分级展示、A 类建议勾选采纳、拒绝建议、artifact 版本摘要。
+  - 更新 `architecture.md` 与 `test-checklist.md`，记录预览/采纳接口与手测项。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，30 tests。
+  - `pnpm build`（frontend）：通过；仅 Vite chunk size warning。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+- 当前说明：
+  - 当前先完成预览与采纳状态闭环；“按已采纳 patch 重新组装改后 tex”的强触发按钮仍待后续增强，E-08 assemble 服务地基已具备。
+
+### F-04：审查报告 + suggested.bib 展示
+
+- 状态：✅ 已完成第一版展示
+- 本次处理：
+  - 扩展 `PaperSuggestionResponse`，携带真实 evidence card 详情：title/authors/year/venue/DOI/arXiv/OpenAlex/S2/URL/PDF/citationCount。
+  - `PaperPreviewService` 从 `suggestion_evidence` 与 `literature_cards` 聚合 evidence cards，确保展示来源仍来自真实文献卡片。
+  - 论文页新增“审查报告与 suggested.bib”面板：展示 severity、category、track、statement、真实 evidence 链接。
+  - 若建议无 evidence，明确提示“禁止直接写入论文”。
+  - 展示推荐文献列表：标题、作者、年份、venue、DOI/URL/PDF/OpenAlex 等可回溯信息，并保留免责声明。
+  - 更新 `architecture.md` 与 `test-checklist.md`。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，30 tests。
+  - `pnpm build`（frontend）：通过；仅 Vite chunk size warning。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+- 当前说明：
+  - 当前展示的是由 evidence cards 支撑的推荐文献列表；suggested.bib 原文内容预览/复制按钮可在后续增强。
+
+### F-04.5：上传入口纠偏为 LaTeX-only
+
+- 状态：✅ 已完成前后端纠偏
+- 本次处理：
+  - 确认论文模块第二期需求为 LaTeX-only，前端仍显示 `.docx` 上传属于早期遗留，不符合当前方向。
+  - 后端 `PaperProcessRequest` 新增 `mainTex` 与可选 `bibFile`，短期保留旧 `file` 字段兼容。
+  - 后端创建任务优先校验并上传 `.tex` 主文件，可选校验并上传 `.bib` 文件。
+  - 任务元数据设置为 `inputFormat=LATEX`，并按是否上传 bib 设置 `mode=LATEX_ONLY/LATEX_BIB`。
+  - 将源 `.tex` / `.bib` 登记为 `source_tex` / `source_bib` artifact，便于后续预览与产物追踪。
+  - 前端论文页上传区改为 `.tex` 主文件必填、`.bib` 可选，提交字段改为 `mainTex` / `bibFile`。
+  - 更新论文控制器集成测试，覆盖 LaTeX 上传与非法扩展名校验。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，30 tests。
+  - `pnpm build`（frontend，通过 `cmd.exe /c pnpm build`）：通过；仅 Vite chunk size warning。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+- 当前说明：
+  - 前端已不再要求上传 `.docx`；浏览器手测时应使用 `.tex` 主文件，可选上传 `.bib`。
+  - 旧 `file` 字段仅作为短期兼容，不作为当前 UI 入口。
+
+### F-05-缺陷 1：任务秒完成但未真实处理
+
+- 状态：✅ 已修复第一版真实 LaTeX 编排入口
+- 问题确认：
+  - 用户上传 `.tex/.bib` 后约 5 秒完成，实际是 `PaperOrchestrator` 仍在运行早期最小骨架流程。
+  - 旧流程中存在 `original-docx`、`summary draft`、`openalex placeholder` 等模拟内容，未真正读取并解析 LaTeX。
+- 本次处理：
+  - 将 `PaperOrchestrator` 的模拟 docx/摘要/章节流程替换为真实 LaTeX 入口。
+  - 任务启动后真实读取 `.tex` 源文件与已登记的 `source_bib` artifact。
+  - 调用 `LatexParserService` 解析文档，识别章节、引用、bibliography 与 lint 信息。
+  - 调用 `LatexRoleRecognitionService` 识别章节角色。
+  - 将章节落库到 `paper_sections`，并为每个原始章节保存 `section_original` artifact。
+  - 如检测到阻塞类结构确认问题，任务进入 `WAITING_INPUT`，发布 `clarification_needed`，不再假完成。
+  - 无阻塞确认项时，调用 `PaperAssembleService` 生成基础版产物：`suggested_bib` 与 `review_report`。
+  - 修复存储服务：MinIO 写入后保留本地备份；MinIO 读取失败或 mock 返回空时回退本地文件，避免测试/本地开发读不到源文件。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，30 tests。
+  - `pnpm build`（frontend，通过 `cmd.exe /c pnpm build`）：通过；仅 Vite chunk size warning。
+  - `mvn -pl yanban-api -am -Dtest=PaperControllerIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`：通过，2 tests。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+- 当前说明：
+  - 这一步先修复“假流程秒完成”的关键缺陷，接入真实解析、章节识别、结构确认与基础组装。
+  - 研究画像、真实文献检索、Gap 分析、分章模型润色等长流程尚未全量串入异步编排，后续继续作为 F-05 缺陷收敛项推进。
+
+### F-05-缺陷 2：结构确认后状态 RUNNING 但不继续推进
+
+- 状态：✅ 已修复后端自动续跑
+- 问题确认：
+  - 阻塞类结构确认触发后，原异步编排线程会正常结束并等待用户输入。
+  - 用户回答完所有确认项后，原逻辑只把任务状态从 `WAITING_INPUT` 改回 `RUNNING`，但没有重新启动编排线程。
+  - 因此前端显示 `RUNNING`，实际没有后续处理。
+- 本次处理：
+  - `PaperClarificationService` 在最后一个 pending clarification 被回答后，事务提交后自动调用 `PaperOrchestrator#startTask(taskId)` 续跑。
+  - `PaperOrchestrator` 在续跑时读取已有 clarification：
+    - 若仍有 `PENDING`，继续保持/进入 `WAITING_INPUT`。
+    - 若已有确认项且均已回答，则跳过重复创建 clarification，继续进入后续组装流程。
+  - 续跑过程中发布 `clarification_resolved` / “结构确认已完成，继续处理”进度事件。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，30 tests。
+  - `mvn -pl yanban-api -am -Dtest=PaperControllerIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`：通过，2 tests。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+- 当前说明：
+  - 本次只修复方案 A：全部结构确认完成后自动续跑。
+  - 页面布局暂未修改。
+
+### F-05-缺陷 3：结构确认续跑时 paper_task_rounds 唯一键冲突
+
+- 状态：✅ 已修复
+- 问题确认：
+  - 结构确认完成后自动续跑会重新进入 `PARSE` 阶段。
+  - 编排再次插入 `taskId + roundNumber=1 + stage=PARSE` 的 round，触发唯一索引 `uk_paper_task_rounds_task_round` 冲突。
+- 本次处理：
+  - `PaperTaskRoundRepository` 增加 `findByTaskIdAndRoundNumberAndStage`。
+  - `PaperTaskRound` 增加状态、输入、输出、备注 setter。
+  - `PaperOrchestrator#persistRound` 从直接插入改为 upsert：若同一任务/轮次/阶段已存在，则更新内容；不存在才创建。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，30 tests。
+  - `mvn -pl yanban-api -am -Dtest=PaperControllerIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`：通过，2 tests。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+
+### F-05-缺陷 4：第二阶段完成后结果文件不可下载
+
+- 状态：✅ 已修复
+- 问题确认：
+  - 论文页“下载结果文件”仍依赖 `paper_tasks.final_object_key`。
+  - 第二阶段当前基础版组装主要生成 `suggested_bib` / `review_report` artifacts，未必生成 `final_object_key`。
+  - 因此前端显示“结果文件：尚未生成”，下载按钮禁用。
+- 本次处理：
+  - 后端 `downloadResult` 支持无 `final_object_key` 但已有结果 artifacts 时，将 `polished_tex` / `suggested_bib` / `review_report` 打包为 zip 下载。
+  - 后端下载接口根据产物类型返回正确文件名与 content-type：zip 或 tex。
+  - 前端下载按钮启用条件从只看 `finalObjectKey` 扩展为：有 `finalObjectKey` 或已有可下载 artifacts。
+  - 前端结果文件文案在 artifacts 存在时显示“已生成 N 个产物，可下载 zip”。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，30 tests。
+  - `pnpm build`：通过，仅 Vite chunk size warning。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+
+### F-05-缺陷 5：生成产物为空壳，未串联真实检索/Gap/润色
+
+- 状态：✅ 已修复第一版串联
+- 问题确认：
+  - 用户下载 zip 后只有 `review-report.md` 和空 `suggested.bib`。
+  - 报告中所有章节为 `PENDING`，建议为 `No suggestions generated`。
+  - 原因是编排只执行 LaTeX 解析、章节识别、结构确认和基础组装，尚未串入研究画像、文献检索、Gap 分析和分章润色。
+- 本次处理：
+  - `PaperOrchestrator` 主链路新增阶段：`PROFILE`、`RETRIEVE`、`GAP_ANALYSIS`、`POLISH`、高级 `ASSEMBLE`。
+  - 研究画像抽取失败或模型返回空 JSON 时，使用标题与章节标题生成降级画像，避免无 query。
+  - 文献检索单源失败时不打断任务，继续其他源。
+  - Gap 分析模型无建议但已有真实检索卡片时，生成保守兜底建议，并绑定真实 evidence card，避免空报告。
+  - 分章润色结果改为真实写入 artifact 存储，不再使用 `memory://` 占位，保证高级组装可读取润色文本。
+  - 完整流程组装改为 advanced mode，产出 `polished_tex`、`suggested_bib`、`review_report`。
+  - 下载策略改为 artifacts 优先打包 zip；即使存在 `finalObjectKey`，也会优先下载包含三件套的 zip。
+  - 前端结果文件文案同步为 artifacts 优先，显示“已生成 N 个产物，可下载 zip”。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，30 tests。
+  - `mvn -pl yanban-api -am -Dtest=PaperControllerIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`：通过，2 tests。
+  - `pnpm build`：通过，仅 Vite chunk size warning。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+
+### F-05-缺陷 6：章节角色识别未接 LLM 复核，References 误判
+
+- 状态：✅ 已修复第一版
+- 问题确认：
+  - 设计文档要求“启发式 → LLM 复核 → 用户可改”的三级角色识别。
+  - 当前实现实际只使用 heuristic，`role-confirm.md` prompt 未被主链路调用。
+  - `LatexParserService#guessRole` 使用 `contains("reference")`，导致 `Reference Beampattern` 被误判为 `REFERENCES`。
+- 本次处理：
+  - `LatexParserService` 将 References 判断改为严格标题匹配：`References` / `Reference` / `Bibliography` / `参考文献` 等，避免正文标题含 reference 被误判。
+  - `LatexRoleRecognitionService` 接入 `role-confirm` prompt：可用模型时执行 LLM 章节角色复核，输出限定在枚举内；模型不可用/解析失败时降级 heuristic。
+  - 增加 References 安全闸门：即使 LLM 返回 `REFERENCES`，也必须通过严格标题匹配，否则不采纳。
+  - `LiteratureService` 写入检索诊断：queries、sourceAttempts、sourceFailures、rawCandidateCount、uniqueCandidateCount、selectedCount。
+  - `PaperAssembleService` 在 `review-report.md` 增加 `Retrieval Diagnostics`，让 `suggested.bib` 为空时能定位是无 query、检索源失败、候选为 0 还是 selected 为 0。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，31 tests。
+  - `mvn -pl yanban-api -am -Dtest=PaperControllerIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`：通过，2 tests。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+
 ## 规划说明
 
-- C 阶段执行计划已从本文件移出，统一维护到 `memory-bank/implementation.md`。
+- 执行计划统一维护到 `memory-bank/implementation.md`。
+- 第二期 LaTeX 方向权威设计纪要见：`memory-bank/discussion_about_fix_paper_20260615.md`。
 - 前端视觉细化方案统一见：`memory-bank/design.md`。
 - 手动验收与已测结果统一见：`memory-bank/test-checklist.md`。
 
 ## 下一步
 
-- 按 `implementation.md` 中的 C 阶段执行顺序推进。
-- 按 `test-checklist.md` 继续补手测记录。
+- 进入 F-05：阶段 F 手测记录与缺陷收敛。
+- 继续按 `implementation.md` 第二期 F 阶段推进。
+
+### F-05-缺陷 7：真实产物质量收敛（重复 `\\end{document}` 与文献推荐偏少）
+
+- 状态：✅ 已修复第一版
+- 问题确认：
+  - 用户真实产物中 `polished.tex` 末尾出现两个 `\\end{document}`，属于编译级错误。
+  - `suggested.bib` 虽已非空，但仅 1 条且偏工具引用；检索 selected 候选未能在 Gap 建议较少时进入推荐产物。
+  - 检索 query 仍主要由代码规则从画像拼接，覆盖面不足。
+- 本次处理：
+  - 新增 `literature-search-query.md` prompt 与 `LiteratureQueryPlanner`，优先让 LLM 基于研究画像生成 8–12 条英文学术检索 query，模型不可用时降级规则 query。
+  - `LiteratureService` 改为使用 query planner，并把论文标题、目标语言、画像一并作为 query 规划上下文。
+  - `PaperAssembleService` 在拼接章节前剥离章节文本尾部 `\\end{document}`，最终只追加一次文档结束标记。
+  - `suggested.bib` 在 Gap evidence 不足时补入当前任务 selected 的高相关真实检索候选，最多补足到 5 条；报告中新增 `Supplemental Bibliography Candidates` 并标记为弱推荐、需人工核验。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，31 tests。
+  - `mvn -pl yanban-api -am -Dtest=PaperControllerIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`：通过，2 tests。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+
+### F-05-缺陷 8：真实产物复核发现 front matter 丢失、结构命令被模型改写、弱相关 bib 进入推荐
+
+- 状态：✅ 已修复代码，需用户重跑任务验证新产物
+- 真实产物复核结论：
+  - `IEEE_TAES_regular_template_latex_v6-artifacts (4)/polished.tex` 已无重复 `\\end{document}`。
+  - 但 `polished.tex` 丢失了 `\\title`、作者、`abstract`、`IEEEkeywords` 等 front matter。
+  - 模型改写了 `\\label{}` / `\\ref{}` 名称，导致部分引用目标变化，并出现 `Fig.~\\ref{fig:ablation}` 指向注释掉的 label 的风险。
+  - `suggested.bib` 中强 evidence 的 2 篇文献较合理，但 supplemental 弱推荐混入了 CP2K、6G、O-RAN 等低相关条目。
+- 本次处理：
+  - `LatexDocument` 新增 `frontMatter`，`LatexParserService` 提取 `\\begin{document}` 到第一个章节之间的标题、作者、摘要、关键词等内容。
+  - `PaperAssembleService` 组装时保留 front matter，避免最终 `polished.tex` 丢标题/摘要/关键词。
+  - `PaperSectionPolishService` 增加结构命令不变量校验：`cite/ref/label/includegraphics/bibliography` 的有序集合必须保持一致；否则拒绝模型输出并保留原文。
+  - `PaperAssembleService` 增加 `REF_WITHOUT_LABEL` lint，检测最终 tex 中未定义 label 的 ref。
+  - supplemental bib 兜底新增最低相关性阈值，避免低分弱相关候选进入 `suggested.bib` 和报告补充候选区。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，32 tests。
+  - `mvn -pl yanban-api -am -Dtest=PaperControllerIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`：通过，2 tests。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+
+### F-05-UI：论文页右侧结果区视觉重构
+
+- 状态：✅ 已完成第一版
+- 本次处理：
+  - 将论文页右侧“结果下载”重构为“结果中心”。
+  - 顶部增加结果下载状态条，集中展示可下载状态、结果文件、原始文件与下载按钮。
+  - 将原本纵向堆叠的结构确认、章节角色、在线预览、审查报告拆分为 Tabs：总览 / 结构 / 章节 / 预览 / 报告。
+  - 每个 Tab 内容区设置固定高度与内部滚动，避免章节很多时右侧变成很长一列。
+  - 右侧列宽从 `l:6` 调整为 `l:7`，左侧上传区从 `l:8` 调整为 `l:7`，提升结果区可读性。
+  - 修正文案：上传步骤由“选择 docx 与参数”改为“选择 tex / bib 与参数”。
+- 已执行验证：
+  - `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅 Vite chunk size warning。
+
+### F-05-检索诊断产物：完整展示 raw/unique/selected 文献
+
+- 状态：✅ 已完成第一版
+- 本次处理：
+  - `LiteratureService` 在每次文献检索后新增两个诊断产物：
+    - `retrieved-literature.json`：完整 JSON，包含 queries、sourceAttempts、rawCandidates、uniqueCandidates、rankedCandidates、selectedCandidates。
+    - `retrieved-literature.md`：适合人工阅读的 Markdown 摘要，列出 query、selected candidates、ranked unique candidates 与 source attempts。
+  - rawCandidates 不去重，用于评估 OpenAlex/arXiv 原始返回质量；unique/ranked/selected 仍保留，用于观察去重和排序效果。
+  - 下载 zip 增加 `retrieved-literature.json` 与 `retrieved-literature.md`，不影响正式 `suggested.bib` 推荐逻辑。
+  - 前端结果中心文案同步显示 `retrieved-literature` 诊断文件数量。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`（Windows JDK/Maven）：通过，32 tests。
+  - `mvn -pl yanban-api -am -Dtest=PaperControllerIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`：通过，2 tests。
+  - `mvn test` 全项目默认测试（Windows JDK/Maven）：通过，28 tests。
+  - `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅 Vite chunk size warning。
+
+### F-05-缺陷 9：首次上传后任务直接 FAILED，第二次才正常启动
+
+- 状态：✅ 已完成首轮修复
+- 用户现象：第一次上传 `.tex` 与 `.bib` 后点击开始处理，任务很快显示 `FAILED`；第二次重新上传同样文件后才正常执行。
+- 分析判断：该问题更像异步编排首启时序/存储读取瞬时失败，而非文件格式问题；首次任务启动后如果源文件或 bib 在本地/MinIO 读取出现瞬时失败，会直接进入 `FAILED`，第二次因连接/存储已热身而成功。
+- 本次修复：
+  - `PaperOrchestrator#startTask` 增加任务级运行去重，避免同一 task 被结构确认恢复、SSE/页面操作等重复触发并发启动。
+  - 主 `.tex` 读取改为 3 次重试，避免上传后本地备份/MinIO 回退存在瞬时不可读时直接失败。
+  - `.bib` 读取改为 3 次重试；若仍失败，不再让整篇任务 `FAILED`，而是发布 `bib_read_skipped` 事件并按无 bib 模式继续解析。
+  - 失败日志保留完整堆栈，错误信息会更明确指向 `source_tex` / `source_bib` 读取问题。
+- 已执行验证：
+  - `mvn -pl yanban-paper test`：通过，32 tests。
+  - `mvn -pl yanban-api -am -Dtest=PaperControllerIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`：通过，2 tests。
+  - `mvn test`：通过，28 tests。
+
+### F-05-文献推荐质量链路：Introduction slots、数量范围、去重与泛化过滤
+
+- 状态：🟡 已完成主要链路修复，剩余质量优化问题已确认
+- 背景：围绕 `IEEE_TAES_regular_template_latex_v6-artifacts (12) ~ (20)` 连续测试，目标是让 LaTeX 论文“仅文献推荐”模式基于 Introduction citation slots 生成稳定、数量可控、可诊断、可去重的推荐列表。
+- 已完成修复：
+  - 文献数量不再固定 8：任务持久化 `literatureCount`，并新增前端/后端 `literatureMinCount` 与 `literatureCount` 范围控制。
+  - Introduction Analysis 改为多次 API 调用：分别生成 `introductionPlan`、`citationSlots`、`citationAudit`，避免单个超长 JSON 被截断。
+  - `review-report.md` 增加 `Introduction Analysis Diagnostics`，可直接查看 LLM call mode、slot count、fallback reason、raw preview 等。
+  - `retrieved-literature.json/md` 展示 raw candidates、unique/ranked candidates、selected candidates，便于区分未去重/检索内去重/最终选择。
+  - `suggested.bib` 与 `suggested-novel.bib` 分离：前者保留推荐全集，后者排除上传 `.bib` 中已有文献。
+  - `.bib` 字段解析支持嵌套花括号，`Uploaded bibliography entries parsed` 已能正确显示 35，已有文献去重开始生效。
+  - LLM slot 数量与 query 质量明显改善：`artifacts (20)` 中 Introduction Analysis 正常 `degraded=false`，`Raw LLM slot count=14`，`Fallback-added slot count=0`。
+  - 最终选择加入 category balancing 与弱泛化过滤，避免 FDA-MIMO jamming 单一方向占满全部推荐。
+- 当前测试结论（`artifacts (20)`）：
+  - Introduction Analysis：✅ 达标，LLM 多调用成功，无 fallback。
+  - Citation slots / queries：✅ 基本达标，能覆盖 FDA-MIMO、polarimetric、constant-modulus、optimization、learning 与 gap。
+  - 数量范围：✅ 基本符合预期，`Selected candidates=27`，未强行用低相关文献补满 30。
+  - 上传 `.bib` 去重：✅ 初步达标，解析 35 条已有 bib，识别 4 条 already-present，`suggested-novel.bib` 输出 22 条。
+  - 推荐质量：🟡 可用但仍需精修，仍有少量 DFRC/通信、OTFS、泛 MIMO/泛波形类弱相关文献进入 `suggested-novel.bib`。
+- 已确认的后续问题：
+  - 泛化/弱相关文献仍未完全压到理想比例，例如 DFRC waveform、MIMO OTFS、Compact Decomposition、泛 MIMO-STAP/空间多样性背景项。
+  - selected 内部仍可能出现多版本/近重复，例如 arXiv 与正式出版版本、标题近似但 DOI/OpenAlex 不同的候选。
+  - 最终报告尚未逐篇标注“对应哪个 citation slot / supportStrength / useAs”，人工审查成本仍偏高。
+- 后续建议：
+  - 增加最终 LLM relevance filter，对 `selectedCandidates` 做二次筛选/降级，输出 `CORE/BACKGROUND/WEAK_REJECTED`。
+  - 在 `retrieved-literature.md` 和 `review-report.md` 中按 citation slot 分组统计推荐数量，并列出每篇对应 slot。
+  - 加强多版本近重复去重：title similarity + DOI/arXiv/published-version 合并 + 作者年份辅助。

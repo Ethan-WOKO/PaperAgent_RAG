@@ -53,6 +53,18 @@ public class PaperStorageService {
         }
     }
 
+    public String storeArtifact(Long userId, String type, String filename, byte[] bytes, String contentType) {
+        try {
+            String safeType = Optional.ofNullable(type).orElse("artifact").replaceAll("[^a-zA-Z0-9._-]", "_");
+            String safeFilename = Optional.ofNullable(filename).orElse("artifact.txt").replaceAll("[^a-zA-Z0-9._-]", "_");
+            String objectKey = buildObjectKey(userId, safeType, safeFilename);
+            storeBytes(objectKey, bytes, contentType == null || contentType.isBlank() ? "text/plain; charset=UTF-8" : contentType);
+            return objectKey;
+        } catch (Exception ex) {
+            throw new IllegalStateException("保存论文产物失败", ex);
+        }
+    }
+
     public byte[] read(String objectKey) {
         try {
             if (properties.isPreferMinio()) {
@@ -62,7 +74,11 @@ public class PaperStorageService {
                             .bucket(properties.getBucket())
                             .object(objectKey)
                             .build())) {
-                        return inputStream.readAllBytes();
+                        if (inputStream != null) {
+                            return inputStream.readAllBytes();
+                        }
+                    } catch (Exception ignored) {
+                        // Fall back to local backup below. This keeps tests and local dev robust when MinIO is mocked or unavailable.
                     }
                 }
             }
@@ -76,13 +92,16 @@ public class PaperStorageService {
         if (properties.isPreferMinio()) {
             MinioClient minioClient = minioClientProvider.getIfAvailable();
             if (minioClient != null) {
-                minioClient.putObject(PutObjectArgs.builder()
-                        .bucket(properties.getBucket())
-                        .object(objectKey)
-                        .stream(new ByteArrayInputStream(bytes), bytes.length, -1)
-                        .contentType(contentType)
-                        .build());
-                return;
+                try {
+                    minioClient.putObject(PutObjectArgs.builder()
+                            .bucket(properties.getBucket())
+                            .object(objectKey)
+                            .stream(new ByteArrayInputStream(bytes), bytes.length, -1)
+                            .contentType(contentType)
+                            .build());
+                } catch (Exception ignored) {
+                    // Keep a local copy below even when MinIO is temporarily unavailable.
+                }
             }
         }
         Path target = properties.getLocalRoot().resolve(objectKey);

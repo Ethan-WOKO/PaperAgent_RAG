@@ -495,6 +495,10 @@ KB 扩展：
     - `POST /api/v1/paper/tasks/{taskId}/pause`
     - `POST /api/v1/paper/tasks/{taskId}/resume`
     - `POST /api/v1/paper/tasks/{taskId}/stop`
+  - 预览/采纳接口：
+    - `GET /api/v1/paper/tasks/{taskId}/suggestions`：返回建议、A/B 诚实分级、evidence 数量、真实 evidence card 详情与 patch JSON
+    - `POST /api/v1/paper/tasks/{taskId}/suggestions/{suggestionId}/status`：更新建议状态（`PROPOSED/ACCEPTED/REJECTED/NEEDS_USER_DATA`）
+    - `GET /api/v1/paper/tasks/{taskId}/artifacts`：返回三件套 artifact 元数据
   - 下载接口：`GET /api/v1/paper/tasks/{taskId}/download`
   - 请求方式：`multipart/form-data`
   - 字段：`file`、`scoreThreshold`、`maxRounds`、`innerMaxAttempts`、`literatureCount`、`targetLanguage`
@@ -530,6 +534,10 @@ KB 扩展：
   - 路由：`/paper`，支持 `?taskId=` 打开已有任务
   - 上传：表单提交 `multipart/form-data` 到 `POST /api/v1/paper/process`
   - 进度：前端使用 `fetch` + `Authorization: Bearer ...` 直连 SSE，避免原生 `EventSource` 无法附带 JWT header 的限制
+  - SSE 事件结构：除 `type/taskId/message/stage/timestamp` 外，已扩展可选进度字段 `currentSection/totalSections/sectionTitle/attempt/maxAttempts/progressPercent`，用于阶段链、章节进度、尝试次数展示；旧事件可不携带这些字段
+  - 事件展示：论文页将底层事件类型映射为中文阶段文案，同时保留折叠的原始 SSE JSON 日志用于调试
+  - 在线预览：论文页读取 section `diffJson/reviewJson`、suggestions 与 artifacts，提供基础版/进阶版切换、源码 JSON 预览、A/B 诚实分级和逐条采纳状态更新
+  - 审查报告展示：论文页基于 suggestions + evidence cards 展示 severity/category/track/statement、真实引用链接、推荐文献列表与免责声明
   - 事件结束策略：收到 `complete / error / paused` 后主动关闭本次 SSE 连接
   - 下载：前端使用带 Bearer token 的 `axios blob` 下载，不再使用新窗口直开 URL，避免下载请求丢失鉴权 header
 - B-12 当前对话跳转论文页实现策略：
