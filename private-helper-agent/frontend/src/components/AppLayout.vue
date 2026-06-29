@@ -9,13 +9,20 @@
         </div>
       </div>
 
-      <div class="app-header__nav">
-        <NButton quaternary round class="app-nav-button" @click="router.push('/chat')">对话</NButton>
-        <NButton quaternary round class="app-nav-button" @click="router.push('/paper')">论文</NButton>
-        <NButton quaternary round class="app-nav-button" @click="router.push('/knowledge-base')">知识库</NButton>
-        <NButton quaternary round class="app-nav-button" @click="router.push('/knowledge-base/search-debug')">检索调试</NButton>
-        <NButton quaternary round class="app-nav-button" @click="router.push('/settings')">设置</NButton>
-      </div>
+      <nav class="app-header__nav" aria-label="主导航">
+        <NButton
+          v-for="item in navItems"
+          :key="item.path"
+          quaternary
+          round
+          class="app-nav-button"
+          :class="{ 'app-nav-button--active': isActiveNav(item.path) }"
+          @click="router.push(item.path)"
+        >
+          <span class="app-nav-button__icon">{{ item.icon }}</span>
+          {{ item.label }}
+        </NButton>
+      </nav>
 
       <NSpace align="center" :size="12">
         <NButton quaternary round class="theme-toggle-button" @click="toggleTheme">
@@ -34,13 +41,29 @@
 
 <script setup lang="ts">
 import { NButton, NLayout, NLayoutContent, NLayoutHeader, NSpace } from 'naive-ui';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { useTheme } from '@/composables/useTheme';
 
 const router = useRouter();
+const route = useRoute();
 const authStore = useAuthStore();
 const { isDark, toggleTheme } = useTheme();
+
+const navItems = [
+  { label: '对话', path: '/chat', icon: '✦' },
+  { label: '论文', path: '/paper', icon: '✎' },
+  { label: '知识库', path: '/knowledge-base', icon: '▣' },
+  { label: '检索调试', path: '/knowledge-base/search-debug', icon: '⌕' },
+  { label: '设置', path: '/settings', icon: '⚙' },
+];
+
+function isActiveNav(path: string) {
+  if (path === '/knowledge-base') {
+    return route.path === path;
+  }
+  return route.path === path || route.path.startsWith(`${path}/`);
+}
 
 async function logout() {
   authStore.clear();

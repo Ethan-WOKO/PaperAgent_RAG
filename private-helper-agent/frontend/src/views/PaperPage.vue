@@ -7,9 +7,25 @@
           <h1>LaTeX 论文处理台</h1>
           <p>上传 LaTeX 主文件（.tex）与可选 .bib 后订阅实时事件，处理完成即可下载三件套结果。</p>
         </div>
-        <NTag :type="currentTask ? statusTagType(currentTask.status) : 'default'" round>
-          {{ currentTask?.status || '未创建任务' }}
-        </NTag>
+        <div class="paper-hero-panel">
+          <NTag :type="currentTask ? statusTagType(currentTask.status) : 'default'" round>
+            {{ currentTask?.status || '未创建任务' }}
+          </NTag>
+          <div class="paper-hero-metrics">
+            <div>
+              <span>进度</span>
+              <strong>{{ progressPercent }}%</strong>
+            </div>
+            <div>
+              <span>阶段</span>
+              <strong>{{ currentStageLabel }}</strong>
+            </div>
+            <div>
+              <span>产物</span>
+              <strong>{{ canDownload ? 'Ready' : 'Pending' }}</strong>
+            </div>
+          </div>
+        </div>
       </section>
 
       <div class="paper-steps-bar">
