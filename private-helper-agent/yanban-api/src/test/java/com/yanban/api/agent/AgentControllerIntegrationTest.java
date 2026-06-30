@@ -2,8 +2,12 @@ package com.yanban.api.agent;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -13,6 +17,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yanban.core.model.ChatMessage;
 import com.yanban.core.model.ChatModelProvider;
 import com.yanban.core.model.ChatResponse;
+import com.yanban.paper.literature.AdHocLiteratureSearchService;
+import com.yanban.paper.literature.AdHocLiteratureSearchService.AdHocLiteratureItem;
+import com.yanban.paper.literature.AdHocLiteratureSearchService.AdHocLiteratureSearchResult;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -45,6 +53,9 @@ class AgentControllerIntegrationTest {
 
     @MockBean(name = "chatModelProvider")
     ChatModelProvider chatModelProvider;
+
+    @MockBean
+    AdHocLiteratureSearchService adHocLiteratureSearchService;
 
     @Test
     void createSessionSendMessageAndListPersistedMessages() throws Exception {
@@ -115,6 +126,87 @@ class AgentControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(2))
                 .andExpect(jsonPath("$[1].content").value(org.hamcrest.Matchers.containsString("/paper")));
+    }
+
+    @Test
+    void literatureIntentReturnsSearchResultsWithoutCallingChatModel() throws Exception {
+        when(adHocLiteratureSearchService.search(eq("FDA-MIMO jamming"), anyInt(), any()))
+                .thenReturn(new AdHocLiteratureSearchResult("FDA-MIMO jamming", List.of(
+                        new AdHocLiteratureItem(
+                                "FDA-MIMO Radar for Mainlobe Jamming Suppression",
+                                List.of("Alice Zhang"),
+                                2024,
+                                "IEEE TAES",
+                                "10.1109/demo",
+                                null,
+                                "W1",
+                                "https://doi.org/10.1109/demo",
+                                "This paper studies FDA-MIMO jamming suppression.",
+                                "openalex",
+                                "FDA-MIMO jamming",
+                                0.91,
+                                "@article{zhang2024fda,\n  title={FDA-MIMO Radar for Mainlobe Jamming Suppression}\n}\n"
+                        )
+                ), 1, 1, 1, List.of()));
+        String token = registerAndGetToken("agent_user_literature_intent");
+        long sessionId = createSession(token, "文献会话");
+
+        mockMvc.perform(post("/api/v1/agent/sessions/{id}/messages", sessionId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"/literature FDA-MIMO jamming 1篇 bibtex\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.navigationUrl").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.assistantContent").value(org.hamcrest.Matchers.containsString("FDA-MIMO Radar")))
+                .andExpect(jsonPath("$.assistantContent").value(org.hamcrest.Matchers.containsString("```bibtex")))
+                .andExpect(jsonPath("$.messages.length()").value(2));
+    }
+
+    @Test
+    void firstMessageAutoGeneratesSessionTitle() throws Exception {
+        when(chatModelProvider.providerName()).thenReturn("mock");
+        when(chatModelProvider.chat(any()))
+                .thenReturn(new ChatResponse(ChatMessage.assistant("主回答"), "stop", null))
+                .thenReturn(new ChatResponse(ChatMessage.assistant("阅读 Java 文件"), "stop", null));
+        String token = registerAndGetToken("agent_user_auto_title");
+        long sessionId = createSession(token, "新会话");
+
+        mockMvc.perform(post("/api/v1/agent/sessions/{id}/messages", sessionId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"请帮我阅读 ChatWebSocketHandler.java\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        mockMvc.perform(get("/api/v1/agent/sessions")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].id").value(sessionId))
+                .andExpect(jsonPath("$[0].title").value("阅读 Java 文件"));
+    }
+
+    @Test
+    void updateSessionCanRenameChangeModelAndDelete() throws Exception {
+        String token = registerAndGetToken("agent_user_update_delete");
+        long sessionId = createSession(token, "旧标题");
+
+        mockMvc.perform(patch("/api/v1/agent/sessions/{id}", sessionId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"title\":\"新标题\",\"modelProvider\":\"glm\",\"model\":\"glm-4.5-air\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.title").value("新标题"))
+                .andExpect(jsonPath("$.modelProvider").value("glm"))
+                .andExpect(jsonPath("$.model").value("glm-4.5-air"));
+
+        mockMvc.perform(delete("/api/v1/agent/sessions/{id}", sessionId)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isNoContent());
+
+        mockMvc.perform(get("/api/v1/agent/sessions/{id}/messages", sessionId)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isNotFound());
     }
 
     @Test

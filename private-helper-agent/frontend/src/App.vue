@@ -32,28 +32,28 @@ const naiveTheme = computed(() => (isDark.value ? darkTheme : lightTheme));
 
 const themeOverrides = computed(() => ({
   common: {
-    primaryColor: isDark.value ? '#ffffff' : '#171717',
-    primaryColorHover: isDark.value ? '#e5e5e5' : '#000000',
-    primaryColorPressed: isDark.value ? '#d4d4d4' : '#000000',
-    primaryColorSuppl: '#0070f3',
-    borderRadius: '6px',
+    primaryColor: isDark.value ? '#6d5dfc' : '#5b5cf6',
+    primaryColorHover: isDark.value ? '#8275ff' : '#4f46e5',
+    primaryColorPressed: isDark.value ? '#5a4be7' : '#4338ca',
+    primaryColorSuppl: isDark.value ? '#22d3ee' : '#2563eb',
+    borderRadius: '12px',
     fontFamily: 'Geist, Inter, Arial, "PingFang SC", "Microsoft YaHei", sans-serif',
     fontFamilyMono: '"Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
     ...(isDark.value
       ? {
-          bodyColor: '#000000',
-          cardColor: '#0a0a0a',
-          modalColor: '#0a0a0a',
-          popoverColor: '#0a0a0a',
-          tableColor: '#0a0a0a',
-          borderColor: '#2e2e2e',
-          dividerColor: '#2e2e2e',
-          textColorBase: '#ededed',
-          textColor1: '#ededed',
-          textColor2: '#a1a1a1',
-          textColor3: '#737373',
-          inputColor: '#000000',
-          hoverColor: '#111111',
+          bodyColor: '#07101d',
+          cardColor: '#101827',
+          modalColor: '#101827',
+          popoverColor: '#101827',
+          tableColor: '#101827',
+          borderColor: 'rgba(148, 163, 184, 0.18)',
+          dividerColor: 'rgba(148, 163, 184, 0.16)',
+          textColorBase: '#eef4ff',
+          textColor1: '#eef4ff',
+          textColor2: '#aeb9cc',
+          textColor3: '#748198',
+          inputColor: '#0b1423',
+          hoverColor: '#172238',
         }
       : {
           bodyColor: '#fafafa',
@@ -72,14 +72,14 @@ const themeOverrides = computed(() => ({
         }),
   },
   Card: {
-    borderRadius: '12px',
+    borderRadius: '18px',
   },
   Input: {
-    borderRadius: '6px',
+    borderRadius: '14px',
   },
   Button: {
-    borderRadiusMedium: '6px',
-    borderRadiusLarge: '100px',
+    borderRadiusMedium: '12px',
+    borderRadiusLarge: '999px',
   },
 }));
 </script>

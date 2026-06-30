@@ -27,8 +27,24 @@ export function listSessions() {
   return http.get<AgentSessionResponse[]>('/agent/sessions');
 }
 
-export function createSession(payload: { title?: string; ragDisabled?: boolean }) {
+export interface UpdateSessionPayload {
+  title?: string;
+  modelProvider?: string;
+  model?: string;
+  maxSteps?: number;
+  ragDisabled?: boolean;
+}
+
+export function createSession(payload: { title?: string; modelProvider?: string; model?: string; maxSteps?: number; ragDisabled?: boolean }) {
   return http.post<AgentSessionResponse>('/agent/sessions', payload);
+}
+
+export function updateSession(sessionId: number, payload: UpdateSessionPayload) {
+  return http.patch<AgentSessionResponse>(`/agent/sessions/${sessionId}`, payload);
+}
+
+export function deleteSession(sessionId: number) {
+  return http.delete<void>(`/agent/sessions/${sessionId}`);
 }
 
 export function listMessages(sessionId: number) {

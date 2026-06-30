@@ -2,7 +2,7 @@
 
 > 文档作用概述：只记录**已完成事项、已验证结果、当前已确认问题**，不承载未来执行计划；后续执行计划统一写入 `implementation.md`，手测安排写入 `test-checklist.md`，具体改动流水写入 `revision-log.md`。
 >
-> 更新时间：2026-06-14
+> 更新时间：2026-06-29
 
 ## 已完成
 
@@ -1811,3 +1811,134 @@ cmd.exe /c "cd /d C:\\java_file\\private_helper_Agent\\private-helper-agent && s
   - 增加最终 LLM relevance filter，对 `selectedCandidates` 做二次筛选/降级，输出 `CORE/BACKGROUND/WEAK_REJECTED`。
   - 在 `retrieved-literature.md` 和 `review-report.md` 中按 citation slot 分组统计推荐数量，并列出每篇对应 slot。
   - 加强多版本近重复去重：title similarity + DOI/arXiv/published-version 合并 + 作者年份辅助。
+
+### F-05-缺陷 10：论文润色原文对照 Critic/Repairer 与日常文献检索入口
+
+- 状态：✅ 已完成第一版并通过自动化验证
+- 背景：对 `reference/IEEE_TAES_regular_template_latex_v6.tex` 与真实润色产物对比后，确认现有润色能提升语言但仍可能重复扩写、概念漂移或新增无依据表述；同时普通聊天缺少直接检索文献的入口。
+- 本次处理：
+  - `section-review.md` 改为 original-aware critic，输入原文、润色文与 diff summary，检查原意保持、unsupported content、结构命令改变和重复扩写。
+  - 新增 `section-repair.md`，当 critic 未通过时做保守最小修复，并进行二次结构/lint/review 校验。
+  - 收紧 `section-polish.md` 与 `introduction-polish.md`，默认保守润色，禁止无依据新增贡献、公式、变量、列表或 citation。
+  - `PaperSectionPolishService` 形成 `polish -> validate -> review -> repair -> revalidate -> rereview` 闭环；未达到 `POLISHED` 的章节不会进入最终 tex。
+  - 新增 `AdHocLiteratureSearchService` 与 `search_literature` tool，普通 Harness/function calling 可检索公开文献并返回题录、DOI/arXiv、相关性分数与 BibTeX。
+  - 新增 `ConversationIntentRouterService`：论文润色仍跳转 `/paper`；显式 `/literature` 与强文献关键词直接检索；弱语义命中先请求用户确认，避免误触发。
+  - 修复 V10 Flyway 在 H2 中的多列 `MODIFY COLUMN` 兼容问题。
+- 已执行验证：
+  - `mvn -pl yanban-api -am -Dtest=ConversationIntentRouterServiceTest,AgentControllerIntegrationTest -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false test`：通过，9 tests。
+  - `mvn -pl yanban-api -am test`：通过，33 tests。
+  - `mvn -pl yanban-paper test`：通过，33 tests。
+- 当前剩余：
+  - 真实模型端到端重跑 IEEE TAES reference 产物，人工复核重复扩写、phase-only projection 概念漂移、符号一致性和 LaTeX 编译 warning 是否进一步下降。
+  - 日常文献检索仍是 LIGHT 搜索；后续可接入更强 slot-aware rerank/LLM relevance filter。
+
+### F-05-缺陷 11：Flyway V10 checksum mismatch
+
+- 状态：✅ 已修复
+- 问题确认：此前为让 H2 测试通过，直接修改了已执行过的 `V10` 主迁移，导致真实 MySQL 的 `flyway_schema_history` checksum 与本地文件不一致，启动失败。
+- 本次处理：
+  - 恢复主资源 V10 为原始 MySQL 写法，不再改变真实库已记录 checksum。
+  - 新增测试专用 `db/migration-h2` 迁移集，V10 在测试集中使用 H2 兼容写法。
+  - 测试环境通过 `spring.flyway.locations=classpath:db/migration-h2` 使用测试迁移，生产/开发真实库继续使用主迁移。
+- 已执行验证：
+  - `mvn -pl yanban-api -am -Dtest=AgentControllerIntegrationTest -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false test`：通过，5 tests。
+  - `mvn -pl yanban-api -am test`：通过，33 tests。
+- 启动建议：重启前清理/重建后端 classpath，确保 IDEA/target/classes 中使用的是恢复后的主 V10 文件；正常情况下不需要对 MySQL 执行 `flyway repair`。
+
+### UI-01：深色高级 Research Workspace 第一版
+
+- 状态：✅ 已完成第一版并通过前端构建
+- 本次处理：
+  - 全站默认改为深色主题。
+  - 全局布局从顶部导航改为左侧工作台导航 + 顶部操作栏。
+  - 聊天页改为三栏：会话列表 / Chat Workspace / Research Agent Activity。
+  - 右侧 Agent Activity 先做 UI 壳，包含 Agent Plan、Tools & Execution、Execution Trace，后续接真实任务拆解和工具执行轨迹。
+  - 全局样式统一为深色高级 SaaS 风格：navy 背景、玻璃卡片、紫蓝/cyan accent、圆角、细边框和状态 badge。
+  - 继续保留主题切换能力，浅色版后续再做精修。
+- 已执行验证：
+  - `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅 Vite chunk size warning。
+- 后续建议：
+  - 浏览器手测 `/chat`、`/paper`、`/knowledge-base`、`/settings`，检查响应式、滚动区域和 Naive 组件在深色主题下的可读性。
+  - 下一轮再细化论文页的 Result Center 卡片和浅色主题。
+
+### UI-02：Chat 工作台协调性打磨
+
+- 状态：✅ 已完成并通过前端构建
+- 本次处理：
+  - Composer 固定在主聊天卡片底部。
+  - 消息区独立滚动，减少整页滚动和底部空白感。
+  - Chat grid 取消居中，让新会话列表更靠近左侧导航。
+  - 主聊天阅读宽度略放大，会话列表和 Agent 面板略收紧。
+  - 顶部工具区、会话 item、右侧 Agent 卡片做轻量化处理。
+- 已执行验证：
+  - `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅 Vite chunk size warning。
+- 后续建议：
+  - 浏览器确认 composer 在不同消息数量下都贴底。
+  - 用较长回答测试消息区滚动、代码块/BibTeX 显示与右侧 Agent 面板滚动。
+
+### Chat-03：模型选择、会话管理和自动标题
+
+- 状态：✅ 已完成并通过前后端验证
+- 本次处理：
+  - Chat composer 附近新增会话级模型选择器。
+  - 会话列表显示最近更新时间，不再显示模型名。
+  - 会话列表支持重命名和删除。
+  - 新会话首条消息后自动生成语义标题；仅默认标题会被覆盖，手动标题不会被自动覆盖。
+  - 会话列表按 updatedAt 倒序，发送消息后更新会话时间。
+- 已执行验证：
+  - `mvn -pl yanban-api -am -Dtest=AgentControllerIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`：通过，7 tests。
+  - `mvn -pl yanban-api -am test`：通过，35 tests。
+  - `cd frontend && pnpm build`：通过，仅 Vite chunk size warning。
+- 后续建议：
+  - 浏览器验证模型切换是否符合预期：新会话继承当前选中模型，旧会话切换后后续消息使用新模型。
+  - 后续可把自动标题改成异步后台任务，避免标题生成增加 WebSocket 回复完成延迟。
+
+### UI-04：Focus 控件和左右面板折叠
+
+- 状态：✅ 已完成并通过前端构建
+- 本次处理：
+  - 用户区登出按钮明确显示 `Sign out ↗`。
+  - Chat 左侧会话列表支持 `⟨` 隐藏和 `☰` 恢复。
+  - Chat 右侧 Research Agent 支持 `⟩` 隐藏和 `✦` 恢复。
+  - 顶部 Research Copilot 支持中下部 `⌃` 隐藏和 `⌄` 恢复。
+  - 三类折叠状态均使用 localStorage 记忆。
+  - 隐藏/恢复使用 grid column + opacity/transform/blur 动画。
+- 已执行验证：
+  - `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅 Vite chunk size warning。
+- 后续建议：
+  - 浏览器手测三种折叠状态组合：只隐藏左侧、只隐藏右侧、左右都隐藏、顶部隐藏。
+  - 检查 1440px 以下宽度下 Research Agent 折叠后的下方区域是否符合预期。
+
+### UI-05：折叠状态动态宽度修复
+
+- 状态：✅ 已完成并通过前端构建
+- 本次处理：
+  - 修复左右栏折叠后主聊天区没有真正放大的问题。
+  - 使用 CSS 变量根据左折叠、右折叠、双侧折叠动态调整 intro/messages/composer 宽度。
+  - 气泡宽度也随折叠状态动态扩大。
+- 已执行验证：
+  - `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅 Vite chunk size warning。
+
+### UI-06：滚动作用域修复
+
+- 状态：✅ 已完成并通过前端构建
+- 本次处理：
+  - 全站恢复默认滚动，避免 Paper 页面被 Chat 专用 overflow 规则误伤。
+  - Chat 路由通过 `.app-workspace--chat` 单独启用固定工作台布局。
+  - Chat 消息区明确为独立滚动容器，composer 保持底部。
+- 已执行验证：
+  - `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅 Vite chunk size warning。
+- 后续浏览器验证重点：
+  - `/paper` 页面可以正常滚轮上下滚动。
+  - `/chat` 鼠标位于消息区域时可以上下滚动历史消息。
+  - `/chat` composer 不遮挡最后一条消息。
+
+### UI-07：Chat 消息轨道宽度收敛
+
+- 状态：✅ 已完成并通过前端构建
+- 本次处理：
+  - 消息区宽度从完全跟随 workspace 扩展，调整为固定阅读轨道。
+  - 用户/AI 气泡最大宽度固定，避免过宽。
+  - composer 和 intro 仍保留动态扩展。
+- 已执行验证：
+  - `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅 Vite chunk size warning。

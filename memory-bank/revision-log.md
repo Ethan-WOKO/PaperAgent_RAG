@@ -1259,3 +1259,318 @@
 - `private-helper-agent/yanban-paper/src/main/resources/prompts/literature-rerank.md`
 - `memory-bank/progress.md`
 - `memory-bank/revision-log.md`
+
+## 2026-06-29
+
+### 修订 论文润色 Critic/Repairer 与日常文献检索第一版
+
+**问题背景**
+- 对 `reference/IEEE_TAES_regular_template_latex_v6.tex` 与润色产物对比后，发现当前润色整体改善语言，但仍可能出现：重复扩写、概念漂移、将 manifold synthesis 误写为 projection、以及新增结构/贡献表达过度等问题。
+- 现有 `section-review` 主要独立审查润色后文本，缺少与原文的逐项对照；日常聊天中也只有论文润色跳转意图，尚不能直接触发文献检索能力。
+
+**修改内容**
+- 新增 `section-repair.md`，用于在 Critic 发现问题后做保守最小修复。
+- 将 `section-review.md` 改为 original-aware critic：输入原文、润色文和 diff summary，重点检查原意保持、unsupported content、LaTeX 结构改变、重复扩写和过度改写。
+- 收紧 `section-polish.md` 与 `introduction-polish.md`：默认保守润色，禁止无依据新增 contribution bullets、变量、模型、公式和 bullet list。
+- 改造 `PaperSectionPolishService`：润色后先做占位/结构/lint 校验，再做原文对照 review；若 review 未通过，调用 repair prompt 做最小修复并二次 review。
+- 新增 `AdHocLiteratureSearchService`，复用公开 `LiteratureSource` 做日常轻量文献检索、去重、年份过滤、相关性排序和 BibTeX 生成。
+- 新增 `search_literature` 工具，供 Harness/function calling 在普通对话中主动检索公开文献。
+- 新增 `ConversationIntentRouterService`，统一处理论文润色跳转与文献检索意图；支持 `/literature`、中文关键词和轻量语义触发。
+
+**修改文件**
+- `private-helper-agent/yanban-paper/src/main/resources/prompts/section-polish.md`
+- `private-helper-agent/yanban-paper/src/main/resources/prompts/introduction-polish.md`
+- `private-helper-agent/yanban-paper/src/main/resources/prompts/section-review.md`
+- `private-helper-agent/yanban-paper/src/main/resources/prompts/section-repair.md`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperSectionPolishService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/literature/AdHocLiteratureSearchService.java`
+- `private-helper-agent/yanban-api/src/main/java/com/yanban/api/agent/SearchLiteratureToolExecutor.java`
+- `private-helper-agent/yanban-api/src/main/java/com/yanban/api/agent/ConversationIntentRouterService.java`
+- `private-helper-agent/yanban-api/src/main/java/com/yanban/api/agent/AgentService.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/literature/AdHocLiteratureSearchServiceTest.java`
+- `private-helper-agent/yanban-api/src/test/java/com/yanban/api/agent/ConversationIntentRouterServiceTest.java`
+
+### 修订 45：补齐 Critic/Repairer 验证、低置信文献检索确认与 H2 迁移兼容
+
+**问题背景**
+- 在接入原文对照 Critic/Repairer 与日常文献检索后，需要验证真实 REST 会话路径是否会触发 `/literature` 检索并持久化消息。
+- 首次全量 API 测试暴露 `V10__extend_literature_cards_and_task_count.sql` 中多列 `MODIFY COLUMN` 写法不兼容 H2 MySQL mode。
+- 日常聊天中的弱语义文献检索意图如果直接执行，可能对普通问题产生误触发。
+
+**修改内容**
+- 将 V10 迁移中的多列 `MODIFY COLUMN` 拆为多条单列 `ALTER TABLE ... MODIFY COLUMN ...`，兼容 H2 测试与 MySQL。
+- `ConversationIntentRouterService` 增加低置信确认策略：显式 `/literature` 与强文献关键词直接检索；弱语义命中只返回确认提示。
+- 移除裸 `references` 英文关键词触发，降低普通编程/语言问题误判。
+- 为 Agent REST 路径补充集成测试：`/literature FDA-MIMO jamming 1篇 bibtex` 直接返回检索结果和 BibTeX，不调用普通模型聊天。
+- 补充路由单元测试：弱语义触发只提示确认；泛化 `Java references` 不触发文献检索。
+- `PaperTaskService` 下载 artifacts 时补充 `source_bib` 支持，并尽量使用 metadata 中原始文件名。
+
+**验证**
+- `cmd.exe /c "cd private-helper-agent && mvn -pl yanban-api -am -Dtest=ConversationIntentRouterServiceTest,AgentControllerIntegrationTest -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false test"`：通过，9 tests。
+- `cmd.exe /c "cd private-helper-agent && mvn -pl yanban-api -am test"`：通过，33 tests；Flyway V1--V11 在 H2 中全部迁移成功。
+- `cmd.exe /c "cd private-helper-agent && mvn -pl yanban-paper test"`：通过，33 tests。
+
+**修改文件**
+- `private-helper-agent/yanban-api/src/main/java/com/yanban/api/agent/ConversationIntentRouterService.java`
+- `private-helper-agent/yanban-api/src/main/java/com/yanban/api/agent/SearchLiteratureToolExecutor.java`
+- `private-helper-agent/yanban-api/src/main/java/com/yanban/api/agent/AgentService.java`
+- `private-helper-agent/yanban-api/src/main/resources/db/migration/V10__extend_literature_cards_and_task_count.sql`
+- `private-helper-agent/yanban-api/src/test/java/com/yanban/api/agent/ConversationIntentRouterServiceTest.java`
+- `private-helper-agent/yanban-api/src/test/java/com/yanban/api/agent/AgentControllerIntegrationTest.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/literature/AdHocLiteratureSearchService.java`
+- `private-helper-agent/yanban-paper/src/main/java/com/yanban/paper/service/PaperTaskService.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/literature/AdHocLiteratureSearchServiceTest.java`
+- `private-helper-agent/yanban-paper/src/test/java/com/yanban/paper/literature/LiteratureServiceTest.java`
+- `memory-bank/revision-log.md`
+- `memory-bank/progress.md`
+- `memory-bank/test-checklist.md`
+- `memory-bank/architecture.md`
+
+### 修订 46：恢复已执行 V10 迁移并隔离 H2 测试迁移
+
+**问题背景**
+- 真实 MySQL 启动时报 Flyway checksum mismatch：`V10` 已在本地库执行，后续直接修改版本化迁移文件导致 `flyway_schema_history` 中的旧 checksum 与本地文件不一致。
+- 自动化测试未暴露该问题，是因为测试使用全新的 H2 内存库，每次从零执行迁移，没有历史 checksum 可对比。
+
+**修改内容**
+- 恢复 `src/main/resources/db/migration/V10__extend_literature_cards_and_task_count.sql` 到原始 MySQL 多列 `MODIFY COLUMN` 写法，保证已执行过 V10 的真实库 checksum 不变。
+- 新增 `src/test/resources/db/migration-h2/`，复制一套测试专用迁移，其中 V10 使用 H2 兼容的单列 `MODIFY COLUMN` 写法。
+- 在 `yanban-api/src/test/resources/application.properties` 中将测试 Flyway location 指向 `classpath:db/migration-h2`。
+- 形成规则：生产/主资源中的已发布版本化迁移不可再修改；测试数据库兼容差异放在测试资源或新增后续迁移中处理。
+
+**验证**
+- `cmd.exe /c "cd private-helper-agent && mvn -pl yanban-api -am -Dtest=AgentControllerIntegrationTest -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false test"`：通过，5 tests。
+- `cmd.exe /c "cd private-helper-agent && mvn -pl yanban-api -am test"`：通过，33 tests。
+
+**修改文件**
+- `private-helper-agent/yanban-api/src/main/resources/db/migration/V10__extend_literature_cards_and_task_count.sql`
+- `private-helper-agent/yanban-api/src/test/resources/application.properties`
+- `private-helper-agent/yanban-api/src/test/resources/db/migration-h2/*.sql`
+- `memory-bank/revision-log.md`
+
+### 修订 47：前端深色高级 Research Workspace 第一版
+
+**问题背景**
+- 现有前端功能已基本打通，但视觉观感偏普通，缺少高级 AI research workspace 的产品感，影响后续继续开发体验。
+- 用户提供多张深色/浅色 UI 参考图，决定先统一做深色高级版，后续再补浅色一键切换细节。
+
+**修改内容**
+- 将默认主题改为深色。
+- 重构 `AppLayout`：从顶部导航改为左侧固定工作台导航 + 顶部任务操作栏。
+- 顶部栏加入 New Task、Upload Paper、Search Literature、Agent Mode 和主题切换入口。
+- 聊天页改为三栏研究工作台：左侧会话列表，中间 Chat workspace，右侧 Research Agent 活动面板。
+- 聊天页新增视觉化 Agent Plan、Tools & Execution、Execution Trace 壳，为后续真实 Agent 任务拆解功能预留承载区域。
+- 全局 CSS 追加 ScholarAI premium workspace refresh 设计系统：深色 navy 背景、玻璃卡片、紫蓝/cyan accent、圆角卡片、状态 badge、paper workflow 卡片与滚动条风格。
+- 保留现有浅色主题变量和一键切换入口，后续可继续细化浅色版。
+
+**验证**
+- `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅保留 Vite chunk size warning。
+
+**修改文件**
+- `private-helper-agent/frontend/src/components/AppLayout.vue`
+- `private-helper-agent/frontend/src/views/ChatPage.vue`
+- `private-helper-agent/frontend/src/App.vue`
+- `private-helper-agent/frontend/src/composables/useTheme.ts`
+- `private-helper-agent/frontend/src/styles.css`
+- `memory-bank/revision-log.md`
+
+### 修订 48：Chat 工作台布局细节打磨
+
+**问题背景**
+- 深色/高级工作台第一版整体方向可用，但 Chat 页仍存在细节不协调：输入框没有稳定贴底、会话列表距离左侧导航偏远、右侧 Agent 面板视觉重量偏强、顶部工具区略松散。
+
+**修改内容**
+- 将 Chat 主卡片内容区改为 `grid-template-rows: auto minmax(0, 1fr) auto`，让消息区独立滚动，composer 稳定贴在底部。
+- Chat 页取消 `max-width + auto margin` 居中，改为在 workspace 内自然铺满，使 Recent Conversations 更靠近左侧导航。
+- 主聊天区消息和输入框宽度上限从 980px 提升到 1120px，消息气泡最大宽度提升到 940px，提升长回答阅读舒适度。
+- 会话列表宽度从 260px 收到 252px，item 高度、hint、metadata 间距变轻，active 会话保留左侧强调线。
+- 顶部工具区变紧凑，checkbox 做成 pill 风格，Skill 下拉缩窄。
+- 右侧 Agent 面板宽度从 330px 收到 318px，卡片阴影、间距和 item padding 降低，减少抢视觉中心的问题。
+- 输入框 textarea 从 minRows 3 调为 2，整体更贴近底部操作区。
+
+**验证**
+- `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅保留 Vite chunk size warning。
+
+**修改文件**
+- `private-helper-agent/frontend/src/views/ChatPage.vue`
+- `private-helper-agent/frontend/src/styles.css`
+- `memory-bank/revision-log.md`
+
+**修订 48 补充**
+- 三栏 Chat 布局的响应式折叠阈值从 1280px 上调到 1560px，避免 1366/1440 等常见屏幕在左侧全局导航存在时出现横向拥挤或溢出。
+
+### 修订 49：修复 Chat 用户消息未贴右的问题
+
+**问题背景**
+- Chat UI 中用户消息虽然使用蓝色气泡和右侧头像，但整组消息没有真正贴到聊天区右侧，视觉上停留在中间偏左，不符合常见聊天界面习惯。
+
+**原因分析**
+- 早期样式中 `.message-row--user` 保留了 `justify-content: flex-end`。
+- 后续新版样式又加入 `flex-direction: row-reverse`，两者叠加后在 row-reverse 主轴下反而会把用户消息组推向左侧/中间。
+
+**修改内容**
+- 在最终覆盖样式中增加消息对齐保护规则：
+  - `.chat-messages` 明确 `align-items: stretch`。
+  - `.message-row` 明确 `width: 100%` 和 `align-self: stretch`。
+  - 助手/系统/工具消息保持 `row + flex-start`。
+  - 用户消息使用 `row-reverse + flex-start`，确保头像在最右、气泡在头像左侧且整组靠右。
+  - 用户气泡最大宽度收窄到 `min(68%, 760px)`，避免短消息横跨过宽。
+
+**验证**
+- `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅保留 Vite chunk size warning。
+
+**修改文件**
+- `private-helper-agent/frontend/src/styles.css`
+- `memory-bank/revision-log.md`
+
+### 修订 50：Chat 模型选择、会话重命名/删除与自动取名
+
+**问题背景**
+- Chat 页面输入框附近缺少会话级模型选择，用户只能去 Settings 修改默认模型，不适合即时切换。
+- 会话列表显示模型名不符合用户预期，应改为显示最近更新时间。
+- 会话不支持重命名和删除，长期使用会导致列表难以管理。
+- 新会话默认标题没有语义，需要在用户发送第一条消息后自动生成简洁标题。
+
+**修改内容**
+- 前端 Chat：
+  - 在 composer 顶部加入 Model 选择器，读取 Settings 中的 deepseek/glm 模型配置。
+  - 新会话使用当前选择的模型创建；已有会话切换模型时同步更新会话模型快照。
+  - 会话列表不再展示 `provider · model`，改为展示“最近更新 x分钟前/小时前”。
+  - 会话 item 增加 `⋯` 菜单，支持重命名和删除。
+  - 增加重命名弹窗，限制 40 字并禁止空标题。
+  - 删除当前会话后自动切换到列表中下一个会话；无会话时清空消息区。
+- 后端 API：
+  - 新增 `PATCH /api/v1/agent/sessions/{sessionId}` 更新标题、模型、maxSteps、RAG 设置。
+  - 新增 `DELETE /api/v1/agent/sessions/{sessionId}` 删除会话，并删除对应消息。
+  - 会话列表排序从 createdAt 改为 updatedAt 倒序。
+  - 发送消息后 touch 会话更新时间。
+  - 当会话标题仍为默认“新会话/研伴对话”且是第一条用户消息时，调用聚合 `chatModelProvider` 生成简洁标题；失败时回退到首条消息截断标题。
+- 测试：
+  - `AgentControllerIntegrationTest` 增加自动取名测试。
+  - `AgentControllerIntegrationTest` 增加重命名、切换模型、删除测试。
+
+**验证**
+- `cd private-helper-agent && cmd.exe /c mvn -pl yanban-api -am -Dtest=AgentControllerIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`：通过，7 tests。
+- `cd private-helper-agent && cmd.exe /c mvn -pl yanban-api -am test`：通过，35 tests。
+- `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅 Vite chunk size warning。
+
+**修改文件**
+- `private-helper-agent/yanban-core/src/main/java/com/yanban/core/agent/AgentSession.java`
+- `private-helper-agent/yanban-core/src/main/java/com/yanban/core/agent/AgentSessionRepository.java`
+- `private-helper-agent/yanban-core/src/main/java/com/yanban/core/agent/AgentMessageRepository.java`
+- `private-helper-agent/yanban-api/src/main/java/com/yanban/api/agent/AgentController.java`
+- `private-helper-agent/yanban-api/src/main/java/com/yanban/api/agent/AgentService.java`
+- `private-helper-agent/yanban-api/src/main/java/com/yanban/api/agent/UpdateSessionRequest.java`
+- `private-helper-agent/yanban-api/src/test/java/com/yanban/api/agent/AgentControllerIntegrationTest.java`
+- `private-helper-agent/frontend/src/api/agent.ts`
+- `private-helper-agent/frontend/src/views/ChatPage.vue`
+- `private-helper-agent/frontend/src/styles.css`
+
+### 修订 51：工作台 Focus 控件与面板折叠动画
+
+**问题背景**
+- 左下角用户区只有登出图标，用户不容易理解其含义。
+- Chat 工作台左右面板固定显示，占用横向空间；用户希望 Recent Conversations 和 Research Agent 都可隐藏，隐藏后中间对话自动扩展。
+- 顶部 Research Copilot 区域占用垂直空间，需要支持隐藏，隐藏后下方工作区向上扩展。
+
+**修改内容**
+- `AppLayout`：
+  - 左下角登出按钮从纯 `↗` 改为 `Sign out ↗`。
+  - 顶部 Research Copilot / route header 增加中下部 `⌃` 收起按钮。
+  - 顶部收起后显示居中的 `⌄` 恢复按钮。
+  - 顶部折叠状态写入 `localStorage`：`yanban.app.topbarCollapsed`。
+- `ChatPage`：
+  - Recent Conversations 标题区增加 `+` 和 `⟨`，`⟨` 用于隐藏左侧会话列表。
+  - 左侧隐藏后显示 `☰` 浮动恢复按钮。
+  - Research Agent 标题区增加 `Live` 和 `⟩`，`⟩` 用于隐藏右侧 Agent 面板。
+  - 右侧隐藏后显示 `✦` 浮动恢复按钮。
+  - 左右面板折叠状态写入 `localStorage`：
+    - `yanban.chat.sessionsCollapsed`
+    - `yanban.chat.agentCollapsed`
+- CSS：
+  - 使用 `grid-template-columns` transition 实现中间聊天区自动扩展动画。
+  - 面板隐藏时增加 opacity、translate、scale、blur 过渡，避免硬切。
+  - 顶部 header 隐藏时压缩高度并淡出，下方 workspace 自动上移。
+
+**验证**
+- `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅保留 Vite chunk size warning。
+
+**修改文件**
+- `private-helper-agent/frontend/src/components/AppLayout.vue`
+- `private-helper-agent/frontend/src/views/ChatPage.vue`
+- `private-helper-agent/frontend/src/styles.css`
+- `memory-bank/revision-log.md`
+
+### 修订 52：折叠状态下 Chat 主体动态扩展
+
+**问题背景**
+- 左右面板折叠后，外层 grid 已释放空间，但 Chat 内部仍受 `width: min(1120px, 100%)` 等 max-width 限制，导致左右仍出现大空白，composer 和消息区没有真正扩大。
+
+**修改内容**
+- 使用 CSS 变量统一控制 Chat 内容宽度：
+  - `--chat-content-width`
+  - `--assistant-bubble-width`
+  - `--user-bubble-width`
+  - `--chat-content-align-margin`
+- 根据折叠状态动态调整：
+  - 左右都展开：内容 `min(1120px, 100%)`，保持原工作台阅读宽度。
+  - 仅折叠左侧或右侧：内容 `min(1280px, 100%)`，单侧扩展。
+  - 左右都折叠：内容 `min(1480px, calc(100% - 80px))`，进入接近全宽 Focus 状态。
+- intro、messages、composer 全部使用统一动态宽度，保证输入框也随布局扩展。
+- assistant/user 气泡宽度跟随状态动态扩大，但用户气泡仍保持比助手窄。
+- 单侧折叠时通过 margin 让内容向被释放的一侧扩展，双侧折叠时保持居中。
+
+**验证**
+- `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅保留 Vite chunk size warning。
+
+**修改文件**
+- `private-helper-agent/frontend/src/styles.css`
+- `memory-bank/revision-log.md`
+
+### 修订 53：修复 Chat/Paper 页面滚轮失效
+
+**问题背景**
+- 为了让 Chat composer 固定底部，之前将 `.app-frame`、`.app-content-shell` 等全局容器设置为 `height: 100vh` / `overflow: hidden`。
+- 该规则影响了非 Chat 页面，导致 Paper 页面不能正常向下滚动。
+- Chat 页面在部分折叠/动态宽度状态下也可能出现消息列表没有被正确约束为独立滚动区，导致鼠标滚轮看起来失效或底部消息被 composer 遮住。
+
+**修改内容**
+- `AppLayout` 为 Chat 路由增加 `.app-workspace--chat` class。
+- 全站恢复默认文档滚动：
+  - `.app-frame` 改回 `height: auto`、`overflow-y: visible`。
+  - `.app-workspace`、`.app-content-shell` 默认允许 visible overflow。
+- 仅在 `.app-workspace--chat` 下启用 viewport-locked 工作台布局：
+  - Chat 页面高度固定为 viewport。
+  - Chat 内部 `chat-messages` 作为独立滚动区。
+  - `chat-workspace-panel` 和 Naive Card content 使用明确 grid 行约束。
+  - composer 保持底部区域，不参与页面滚动。
+- 给 Chat 消息区增加底部 padding，降低 composer 遮挡底部消息的风险。
+
+**验证**
+- `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅保留 Vite chunk size warning。
+
+**修改文件**
+- `private-helper-agent/frontend/src/components/AppLayout.vue`
+- `private-helper-agent/frontend/src/styles.css`
+- `memory-bank/revision-log.md`
+
+### 修订 54：Chat 消息轨道固定宽度优化
+
+**问题背景**
+- 左右面板折叠后，主工作区扩展正常，但消息气泡也随之变得过宽，用户/AI 头像和气泡视觉距离过大，阅读不够紧凑。
+
+**修改内容**
+- 保留 intro / composer 的动态扩展，但将消息区单独设为固定阅读轨道。
+- 新增 CSS 变量：
+  - `--chat-message-lane-width`
+  - `--assistant-fixed-bubble-width`
+  - `--user-fixed-bubble-width`
+- 根据默认、单侧折叠、双侧折叠三个状态设置消息轨道上限。
+- assistant / user 气泡改用固定最大宽度，避免在 Focus 状态下被拉得过宽。
+
+**验证**
+- `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅保留 Vite chunk size warning。
+
+**修改文件**
+- `private-helper-agent/frontend/src/styles.css`
+- `memory-bank/revision-log.md`

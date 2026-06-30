@@ -5,7 +5,7 @@ import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface AgentSessionRepository extends JpaRepository<AgentSession, Long> {
-    List<AgentSession> findByUserIdOrderByCreatedAtDesc(Long userId);
+    List<AgentSession> findByUserIdOrderByUpdatedAtDesc(Long userId);
 
     Optional<AgentSession> findByIdAndUserId(Long id, Long userId);
 }

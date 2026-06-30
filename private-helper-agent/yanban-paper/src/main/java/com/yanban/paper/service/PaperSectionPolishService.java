@@ -108,31 +108,47 @@ public class PaperSectionPolishService {
                 continue;
             }
             String polished = maskingService.unmask(polishedMasked, masked.placeholders());
-            if (unexpectedTranslation(latexSection.rawText(), polished)) {
-                lastRejectedReason = "unexpected_translation_detected";
+            CandidateValidation candidateValidation = validateCandidate(latexSection.rawText(), polished);
+            if (!candidateValidation.valid()) {
+                lastRejectedReason = candidateValidation.reason();
                 reviewComments = lastRejectedReason;
                 continue;
             }
-            if (!structuralCommandsPreserved(latexSection.rawText(), polished)) {
-                lastRejectedReason = "structural_command_changed";
-                reviewComments = lastRejectedReason;
-                continue;
-            }
-            List<LatexLintIssue> lintIssues = maskingService.lint(polished);
-            if (hasBlocker(lintIssues)) {
-                lastRejectedReason = "latex_lint_failed " + lintIssues;
-                reviewComments = lastRejectedReason;
-                continue;
-            }
-            Review review = review(task, latexSection, researchProfile, polished, targetLanguage, scoreThreshold);
+            Map<String, Object> candidateDiff = diff(latexSection.rawText(), polished);
+            Review review = review(task, latexSection, researchProfile, latexSection.rawText(), polished, targetLanguage, scoreThreshold, candidateDiff);
             if (review.passed() && review.score() >= scoreThreshold) {
                 return persist(task, storedSection, "POLISHED", latexSection.rawText(), polished, review.score(), true, attempt,
-                        review.raw(), diff(latexSection.rawText(), polished), lintIssues);
+                        review.raw(), candidateDiff, candidateValidation.lintIssues());
             }
-            reviewComments = summarizeReview(review.raw());
+
+            String criticComments = summarizeReview(review.raw());
+            RepairResult repair = repair(task, latexSection, researchProfile, latexSection.rawText(), polished, targetLanguage, criticComments);
+            if (repair.success()) {
+                CandidateValidation repairValidation = validateCandidate(latexSection.rawText(), repair.polishedText());
+                if (repairValidation.valid()) {
+                    Map<String, Object> repairDiff = diff(latexSection.rawText(), repair.polishedText());
+                    Review repairReview = review(task, latexSection, researchProfile, latexSection.rawText(), repair.polishedText(), targetLanguage, scoreThreshold, repairDiff);
+                    Map<String, Object> repairReviewRaw = withRepairMeta(repairReview.raw(), review.raw(), true, repair.raw());
+                    if (repairReview.passed() && repairReview.score() >= scoreThreshold) {
+                        return persist(task, storedSection, "POLISHED", latexSection.rawText(), repair.polishedText(), repairReview.score(), true, attempt,
+                                repairReviewRaw, repairDiff, repairValidation.lintIssues());
+                    }
+                    polished = repair.polishedText();
+                    candidateDiff = repairDiff;
+                    candidateValidation = repairValidation;
+                    review = new Review(repairReview.score(), repairReview.passed(), repairReviewRaw);
+                    criticComments = summarizeReview(repairReviewRaw);
+                } else {
+                    criticComments = criticComments + "\nrepair_rejected: " + repairValidation.reason();
+                }
+            } else {
+                criticComments = criticComments + "\nrepair_failed: " + repair.raw();
+            }
+
+            reviewComments = criticComments;
             if (attempt == attempts) {
                 return persist(task, storedSection, "REVIEW_FAILED", latexSection.rawText(), polished, review.score(), false, attempt,
-                        review.raw(), diff(latexSection.rawText(), polished), lintIssues);
+                        review.raw(), candidateDiff, candidateValidation.lintIssues());
             }
         }
         return persist(task, storedSection, "FAILED_KEEP_ORIGINAL", latexSection.rawText(), latexSection.rawText(), 0, false, attempts,
@@ -185,14 +201,30 @@ public class PaperSectionPolishService {
         return commands;
     }
 
-    private Review review(PaperTask task, LatexSection section, String researchProfile, String polishedText,
-                          String targetLanguage, double scoreThreshold) {
+    private CandidateValidation validateCandidate(String original, String polished) {
+        if (unexpectedTranslation(original, polished)) {
+            return new CandidateValidation(false, "unexpected_translation_detected", List.of());
+        }
+        if (!structuralCommandsPreserved(original, polished)) {
+            return new CandidateValidation(false, "structural_command_changed", List.of());
+        }
+        List<LatexLintIssue> lintIssues = maskingService.lint(polished);
+        if (hasBlocker(lintIssues)) {
+            return new CandidateValidation(false, "latex_lint_failed " + lintIssues, lintIssues);
+        }
+        return new CandidateValidation(true, "", lintIssues);
+    }
+
+    private Review review(PaperTask task, LatexSection section, String researchProfile, String originalText,
+                          String polishedText, String targetLanguage, double scoreThreshold, Map<String, Object> diffSummary) {
         String prompt = promptService.render("section-review", Map.of(
                 "targetLanguage", blankToDefault(targetLanguage, task.getTargetLanguage()),
                 "paperTitle", task.getTitle(),
                 "researchProfile", researchProfile,
                 "sectionTitle", section.title(),
                 "scoreThreshold", scoreThreshold,
+                "diffSummary", toJson(diffSummary),
+                "originalText", originalText,
                 "sectionText", polishedText
         ));
         String text;
@@ -204,7 +236,45 @@ public class PaperSectionPolishService {
         Map<String, Object> raw = parseMap(text);
         double score = number(raw.get("score"), 0);
         boolean passed = booleanValue(raw.get("passed"), score >= scoreThreshold);
+        boolean introducedUnsupported = booleanValue(raw.get("introducedUnsupportedContent"), false);
+        boolean needsRepair = booleanValue(raw.get("needsRepair"), false);
+        if (introducedUnsupported || needsRepair) {
+            passed = false;
+        }
         return new Review(score, passed, raw);
+    }
+
+    private RepairResult repair(PaperTask task, LatexSection section, String researchProfile, String originalText,
+                                String polishedText, String targetLanguage, String reviewComments) {
+        String prompt = promptService.render("section-repair", Map.of(
+                "targetLanguage", blankToDefault(targetLanguage, task.getTargetLanguage()),
+                "paperTitle", task.getTitle(),
+                "researchProfile", researchProfile,
+                "sectionTitle", section.title(),
+                "reviewComments", reviewComments == null || reviewComments.isBlank() ? "None." : reviewComments,
+                "originalText", originalText,
+                "polishedText", polishedText
+        ));
+        String text;
+        try {
+            text = modelClient.complete("Repair conservatively and return tagged output only.", prompt, 0.2, 4096);
+        } catch (Exception ex) {
+            return new RepairResult(false, polishedText, Map.of("reason", "repair_model_call_failed", "message", ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage()));
+        }
+        String repaired = extractOutput(text);
+        if (repaired.isBlank()) {
+            return new RepairResult(false, polishedText, Map.of("reason", "repair_empty_output"));
+        }
+        return new RepairResult(true, repaired, Map.of("reason", "repair_model_output"));
+    }
+
+    private Map<String, Object> withRepairMeta(Map<String, Object> repairReview, Map<String, Object> initialReview,
+                                               boolean repairApplied, Map<String, Object> repairRaw) {
+        Map<String, Object> merged = new LinkedHashMap<>(repairReview == null ? Map.of() : repairReview);
+        merged.put("repairApplied", repairApplied);
+        merged.put("initialReview", initialReview == null ? Map.of() : initialReview);
+        merged.put("repair", repairRaw == null ? Map.of() : repairRaw);
+        return merged;
     }
 
     private SectionPolishResult persist(PaperTask task, Optional<PaperSection> storedSection, String status,
@@ -276,6 +346,8 @@ public class PaperSectionPolishService {
         diff.put("changed", !original.equals(polished));
         diff.put("commonPrefixWords", commonPrefix);
         diff.put("lengthDelta", polished.length() - original.length());
+        int maxWords = Math.max(originalWords.size(), polishedWords.size());
+        diff.put("changeRatio", maxWords == 0 ? 0.0 : 1.0 - ((double) commonPrefix / maxWords));
         return diff;
     }
 
@@ -329,6 +401,12 @@ public class PaperSectionPolishService {
 
     private String blankToDefault(String value, String fallback) {
         return value == null || value.isBlank() ? (fallback == null ? "" : fallback) : value;
+    }
+
+    private record CandidateValidation(boolean valid, String reason, List<LatexLintIssue> lintIssues) {
+    }
+
+    private record RepairResult(boolean success, String polishedText, Map<String, Object> raw) {
     }
 
     private record Review(double score, boolean passed, Map<String, Object> raw) {

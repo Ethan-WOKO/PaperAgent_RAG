@@ -1,7 +1,23 @@
 <template>
   <AppLayout>
-    <div class="chat-page research-chat-page">
-      <aside class="chat-sidebar">
+    <div
+      class="chat-page research-chat-page"
+      :class="{
+        'research-chat-page--sessions-collapsed': chatSidebarCollapsed,
+        'research-chat-page--agent-collapsed': agentSidebarCollapsed,
+      }"
+    >
+      <button
+        v-if="chatSidebarCollapsed"
+        type="button"
+        class="chat-rail-toggle chat-rail-toggle--sessions"
+        title="Show conversations"
+        @click="setChatSidebarCollapsed(false)"
+      >
+        ☰
+      </button>
+
+      <aside class="chat-sidebar" :aria-hidden="chatSidebarCollapsed">
         <NCard size="small" class="chat-panel chat-session-panel">
           <template #header>
             <div class="panel-heading">
@@ -10,28 +26,34 @@
             </div>
           </template>
           <template #header-extra>
-            <NButton type="primary" size="small" circle @click="handleCreateSession">+</NButton>
+            <div class="chat-session-actions">
+              <NButton type="primary" size="small" circle @click="handleCreateSession">+</NButton>
+              <NButton secondary circle size="small" class="chat-panel-collapse" title="Hide conversations" @click="setChatSidebarCollapsed(true)">⟨</NButton>
+            </div>
           </template>
 
           <div class="chat-sidebar__hint">会话保留模型、RAG 和工具设置。建议按任务主题拆分对话。</div>
 
           <NSpace vertical :size="8">
             <NEmpty v-if="sessions.length === 0" description="还没有会话" size="small" />
-            <NButton
+            <div
               v-for="session in sessions"
               :key="session.id"
-              block
-              text
+              role="button"
+              tabindex="0"
               class="session-item"
               :class="{ 'session-item--active': selectedSessionId === session.id }"
               @click="selectSession(session.id)"
+              @keydown.enter.prevent="selectSession(session.id)"
             >
               <div class="session-item__content">
                 <div class="session-item__title">{{ session.title || `会话 #${session.id}` }}</div>
-                <div class="session-item__meta">{{ session.modelProvider }} · {{ session.model }}</div>
-                <div class="session-item__meta">max_steps {{ session.maxSteps }}</div>
+                <div class="session-item__meta">最近更新 {{ formatSessionUpdatedAt(session.updatedAt || session.createdAt) }}</div>
               </div>
-            </NButton>
+              <NDropdown trigger="click" :options="sessionMenuOptions" @select="(key) => handleSessionMenuSelect(key, session)">
+                <NButton quaternary circle size="tiny" class="session-item__more" @click.stop>⋯</NButton>
+              </NDropdown>
+            </div>
           </NSpace>
         </NCard>
       </aside>
@@ -39,7 +61,7 @@
       <section class="chat-main">
         <NCard
           class="chat-panel chat-workspace-panel"
-          :content-style="{ height: 'calc(100% - 76px)', display: 'flex', flexDirection: 'column', gap: '14px' }"
+          :content-style="{ display: 'grid', gridTemplateRows: 'auto minmax(0, 1fr) auto', gap: '12px', minHeight: '0' }"
         >
           <template #header>
             <div class="chat-room-title">
@@ -59,7 +81,7 @@
               <NCheckbox v-model:checked="ragDisabled">禁用知识库</NCheckbox>
               <NSelect
                 v-model:value="selectedSkillId"
-                style="width: 220px"
+                style="width: 190px"
                 clearable
                 :options="skillOptions"
                 placeholder="Skill（可选）"
@@ -120,15 +142,28 @@
           </div>
 
           <div class="chat-composer">
-            <div class="chat-composer__quick-actions">
-              <button type="button" @click="draft = '/literature polarimetric FDA-MIMO self-protection jamming 5篇 bibtex'">Search Papers</button>
-              <button type="button" @click="draft = '帮我润色论文'">Polish Paper</button>
-              <button type="button" @click="showProcessMessages = !showProcessMessages">Tool Trace</button>
+            <div class="chat-composer__topline">
+              <div class="chat-composer__model-picker">
+                <span>Model</span>
+                <NSelect
+                  v-model:value="selectedModelKey"
+                  size="small"
+                  class="chat-model-select"
+                  :options="modelOptions"
+                  placeholder="选择模型"
+                  @update:value="handleModelChange"
+                />
+              </div>
+              <div class="chat-composer__quick-actions">
+                <button type="button" @click="draft = '/literature polarimetric FDA-MIMO self-protection jamming 5篇 bibtex'">Search Papers</button>
+                <button type="button" @click="draft = '帮我润色论文'">Polish Paper</button>
+                <button type="button" @click="showProcessMessages = !showProcessMessages">Tool Trace</button>
+              </div>
             </div>
             <NInput
               v-model:value="draft"
               type="textarea"
-              :autosize="{ minRows: 3, maxRows: 7 }"
+              :autosize="{ minRows: 2, maxRows: 6 }"
               placeholder="Ask a research question or describe a task..."
               @keydown.enter.exact.prevent="handleSend"
             />
@@ -140,14 +175,27 @@
         </NCard>
       </section>
 
-      <aside class="agent-sidebar">
+      <button
+        v-if="agentSidebarCollapsed"
+        type="button"
+        class="chat-rail-toggle chat-rail-toggle--agent"
+        title="Show Research Agent"
+        @click="setAgentSidebarCollapsed(false)"
+      >
+        ✦
+      </button>
+
+      <aside class="agent-sidebar" :aria-hidden="agentSidebarCollapsed">
         <section class="agent-card agent-card--plan">
           <div class="agent-card__head">
             <div>
               <strong>Research Agent</strong>
               <span>Agent Plan</span>
             </div>
-            <em>Live</em>
+            <div class="agent-card__head-actions">
+              <em>Live</em>
+              <NButton secondary circle size="small" class="chat-panel-collapse" title="Hide Research Agent" @click="setAgentSidebarCollapsed(true)">⟩</NButton>
+            </div>
           </div>
           <div class="agent-progress"><span :style="{ width: sending ? '62%' : '36%' }" /></div>
           <div class="agent-plan-list">
@@ -177,16 +225,41 @@
         </section>
       </aside>
     </div>
+
+    <NModal v-model:show="renameModalVisible" preset="card" title="重命名会话" style="width: 420px" :bordered="false">
+      <NSpace vertical :size="14">
+        <NInput
+          v-model:value="renameDraft"
+          maxlength="40"
+          show-count
+          placeholder="输入新的会话名称"
+          @keydown.enter.prevent="confirmRenameSession"
+        />
+        <NSpace justify="end">
+          <NButton secondary @click="renameModalVisible = false">取消</NButton>
+          <NButton type="primary" :loading="renaming" @click="confirmRenameSession">保存</NButton>
+        </NSpace>
+      </NSpace>
+    </NModal>
   </AppLayout>
 </template>
 
 <script setup lang="ts">
-import { NButton, NCard, NCheckbox, NEmpty, NInput, NSelect, NSpace } from 'naive-ui';
+import { NButton, NCard, NCheckbox, NDropdown, NEmpty, NInput, NModal, NSelect, NSpace } from 'naive-ui';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import AppLayout from '@/components/AppLayout.vue';
-import { createSession, listMessages, listSessions, type AgentMessageResponse, type AgentSessionResponse } from '@/api/agent';
+import {
+  createSession,
+  deleteSession as deleteAgentSession,
+  listMessages,
+  listSessions,
+  updateSession as updateAgentSession,
+  type AgentMessageResponse,
+  type AgentSessionResponse,
+} from '@/api/agent';
 import { listSkills, type SkillListItemResponse } from '@/api/skills';
+import { getSettings, type UserSettingsResponse } from '@/api/settings';
 import { useAuthStore } from '@/stores/auth';
 import { ui } from '@/ui';
 
@@ -223,15 +296,44 @@ const draft = ref('');
 const sending = ref(false);
 const selectedSkillId = ref<string | null>(null);
 const availableSkills = ref<SkillListItemResponse[]>([]);
+const settings = ref<UserSettingsResponse | null>(null);
+const selectedModelKey = ref('');
 const ragDisabled = ref(false);
 const showProcessMessages = ref(false);
 const currentSocket = ref<WebSocket | null>(null);
 const currentAssistantMessageId = ref<string | null>(null);
 const messagesContainerRef = ref<HTMLElement | null>(null);
+const renameModalVisible = ref(false);
+const renameSessionId = ref<number | null>(null);
+const renameDraft = ref('');
+const renaming = ref(false);
+const CHAT_SIDEBAR_COLLAPSED_KEY = 'yanban.chat.sessionsCollapsed';
+const AGENT_SIDEBAR_COLLAPSED_KEY = 'yanban.chat.agentCollapsed';
+const chatSidebarCollapsed = ref(readStoredBoolean(CHAT_SIDEBAR_COLLAPSED_KEY, false));
+const agentSidebarCollapsed = ref(readStoredBoolean(AGENT_SIDEBAR_COLLAPSED_KEY, false));
+
+const sessionMenuOptions = [
+  { label: '重命名', key: 'rename' },
+  { label: '删除', key: 'delete' },
+];
 
 const skillOptions = computed(() => availableSkills.value
   .filter((skill) => skill.enabled)
   .map((skill) => ({ label: `${skill.name}${skill.source === 'builtin' ? '（内置）' : ''}`, value: skill.id })));
+
+const modelOptions = computed(() => {
+  const deepseekModel = settings.value?.deepseekModel || 'deepseek-chat';
+  const glmModel = settings.value?.glmModel || 'glm-4.5-air';
+  const options = [
+    { label: `DeepSeek · ${deepseekModel}`, value: toModelKey('deepseek', deepseekModel) },
+    { label: `GLM · ${glmModel}`, value: toModelKey('glm', glmModel) },
+  ];
+  if (selectedModelKey.value && !options.some((option) => option.value === selectedModelKey.value)) {
+    const selected = parseModelKey(selectedModelKey.value);
+    options.push({ label: `${formatProviderName(selected.provider)} · ${selected.model}`, value: selectedModelKey.value });
+  }
+  return options;
+});
 
 const activeSessionTitle = computed(() => {
   const active = sessions.value.find((item) => item.id === selectedSessionId.value);
@@ -247,12 +349,28 @@ const filteredMessages = computed(() => {
 });
 
 onMounted(async () => {
-  await Promise.all([loadSessions(), loadSkills()]);
+  await Promise.all([loadSettings(), loadSkills()]);
+  await loadSessions();
 });
 
 onBeforeUnmount(() => {
   currentSocket.value?.close();
 });
+
+async function loadSettings() {
+  try {
+    const { data } = await getSettings();
+    settings.value = data;
+    if (!selectedModelKey.value) {
+      selectedModelKey.value = defaultModelKeyFromSettings(data);
+    }
+  } catch (error: any) {
+    ui.message.error(error.response?.data?.message || '加载模型设置失败');
+    if (!selectedModelKey.value) {
+      selectedModelKey.value = toModelKey('deepseek', 'deepseek-chat');
+    }
+  }
+}
 
 async function loadSkills() {
   try {
@@ -275,6 +393,9 @@ async function selectSession(sessionId: number) {
   selectedSessionId.value = sessionId;
   const session = sessions.value.find((item) => item.id === sessionId);
   ragDisabled.value = Boolean(session?.ragDisabled);
+  if (session?.modelProvider && session?.model) {
+    selectedModelKey.value = toModelKey(session.modelProvider, session.model);
+  }
   await reloadCurrentMessages();
 }
 
@@ -290,7 +411,13 @@ async function reloadCurrentMessages() {
 
 async function handleCreateSession() {
   try {
-    const { data } = await createSession({ title: '新会话', ragDisabled: false });
+    const selectedModel = parseModelKey(selectedModelKey.value || defaultModelKeyFromSettings(settings.value));
+    const { data } = await createSession({
+      title: '新会话',
+      ragDisabled: false,
+      modelProvider: selectedModel.provider,
+      model: selectedModel.model,
+    });
     sessions.value = [data, ...sessions.value];
     await selectSession(data.id);
     ui.message.success('已创建新会话');
@@ -312,11 +439,18 @@ async function handleSend() {
     sending.value = true;
     let sessionId = selectedSessionId.value;
     if (!sessionId) {
-      const title = draft.value.trim().slice(0, 20) || '新会话';
-      const { data } = await createSession({ title, ragDisabled: ragDisabled.value });
+      const selectedModel = parseModelKey(selectedModelKey.value || defaultModelKeyFromSettings(settings.value));
+      const { data } = await createSession({
+        title: '新会话',
+        ragDisabled: ragDisabled.value,
+        modelProvider: selectedModel.provider,
+        model: selectedModel.model,
+      });
       sessions.value = [data, ...sessions.value];
       selectedSessionId.value = data.id;
       sessionId = data.id;
+    } else {
+      await ensureActiveSessionModelSynced(sessionId);
     }
 
     const content = draft.value.trim();
@@ -451,6 +585,133 @@ function removePendingAssistant() {
   currentAssistantMessageId.value = null;
 }
 
+async function handleModelChange(value: string) {
+  selectedModelKey.value = value;
+  if (!selectedSessionId.value) {
+    return;
+  }
+  try {
+    const selectedModel = parseModelKey(value);
+    const { data } = await updateAgentSession(selectedSessionId.value, {
+      modelProvider: selectedModel.provider,
+      model: selectedModel.model,
+    });
+    replaceSession(data);
+  } catch (error: any) {
+    ui.message.error(error.response?.data?.message || '切换模型失败');
+  }
+}
+
+async function ensureActiveSessionModelSynced(sessionId: number) {
+  const selectedModel = parseModelKey(selectedModelKey.value || defaultModelKeyFromSettings(settings.value));
+  const active = sessions.value.find((item) => item.id === sessionId);
+  if (active?.modelProvider === selectedModel.provider && active?.model === selectedModel.model) {
+    return;
+  }
+  const { data } = await updateAgentSession(sessionId, {
+    modelProvider: selectedModel.provider,
+    model: selectedModel.model,
+  });
+  replaceSession(data);
+}
+
+async function handleSessionMenuSelect(key: string | number, session: AgentSessionResponse) {
+  if (key === 'rename') {
+    openRenameSession(session);
+    return;
+  }
+  if (key === 'delete') {
+    await handleDeleteSession(session);
+  }
+}
+
+function readStoredBoolean(key: string, fallback: boolean) {
+  if (typeof window === 'undefined') {
+    return fallback;
+  }
+  const value = window.localStorage.getItem(key);
+  if (value == null) {
+    return fallback;
+  }
+  return value === 'true';
+}
+
+function setStoredBoolean(key: string, value: boolean) {
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem(key, String(value));
+  }
+}
+
+function setChatSidebarCollapsed(collapsed: boolean) {
+  chatSidebarCollapsed.value = collapsed;
+  setStoredBoolean(CHAT_SIDEBAR_COLLAPSED_KEY, collapsed);
+}
+
+function setAgentSidebarCollapsed(collapsed: boolean) {
+  agentSidebarCollapsed.value = collapsed;
+  setStoredBoolean(AGENT_SIDEBAR_COLLAPSED_KEY, collapsed);
+}
+
+function openRenameSession(session: AgentSessionResponse) {
+  renameSessionId.value = session.id;
+  renameDraft.value = session.title || '';
+  renameModalVisible.value = true;
+}
+
+async function confirmRenameSession() {
+  const title = renameDraft.value.trim();
+  if (!renameSessionId.value || !title) {
+    ui.message.warning('请输入会话名称');
+    return;
+  }
+  try {
+    renaming.value = true;
+    const { data } = await updateAgentSession(renameSessionId.value, { title });
+    replaceSession(data);
+    renameModalVisible.value = false;
+    ui.message.success('已重命名');
+  } catch (error: any) {
+    ui.message.error(error.response?.data?.message || '重命名失败');
+  } finally {
+    renaming.value = false;
+  }
+}
+
+async function handleDeleteSession(session: AgentSessionResponse) {
+  if (sending.value) {
+    ui.message.warning('当前正在回复，暂不能删除会话');
+    return;
+  }
+  if (!window.confirm(`确定删除「${session.title || `会话 #${session.id}`}」吗？`)) {
+    return;
+  }
+  try {
+    await deleteAgentSession(session.id);
+    sessions.value = sessions.value.filter((item) => item.id !== session.id);
+    if (selectedSessionId.value === session.id) {
+      const next = sessions.value[0];
+      if (next) {
+        await selectSession(next.id);
+      } else {
+        selectedSessionId.value = null;
+        messages.value = [];
+      }
+    }
+    ui.message.success('已删除会话');
+  } catch (error: any) {
+    ui.message.error(error.response?.data?.message || '删除会话失败');
+  }
+}
+
+function replaceSession(session: AgentSessionResponse) {
+  const index = sessions.value.findIndex((item) => item.id === session.id);
+  if (index >= 0) {
+    sessions.value.splice(index, 1, session);
+  } else {
+    sessions.value = [session, ...sessions.value];
+  }
+}
+
 async function afterSendFinished(sessionId: number) {
   sending.value = false;
   currentAssistantMessageId.value = null;
@@ -458,6 +719,10 @@ async function afterSendFinished(sessionId: number) {
   const { data } = await listSessions();
   sessions.value = data;
   selectedSessionId.value = sessionId;
+  const active = sessions.value.find((item) => item.id === sessionId);
+  if (active?.modelProvider && active?.model) {
+    selectedModelKey.value = toModelKey(active.modelProvider, active.model);
+  }
 }
 
 function toViewMessage(message: AgentMessageResponse): ChatMessageView {
@@ -522,6 +787,58 @@ function getMessageSegments(content: string): MessageSegment[] {
 function extractNavigationUrl(content: string) {
   const matched = content.match(/\/paper(?:\?[^\s]+)?/);
   return matched?.[0] || null;
+}
+
+function toModelKey(provider: string, model: string) {
+  return `${provider || 'deepseek'}::${model || 'deepseek-chat'}`;
+}
+
+function parseModelKey(key: string) {
+  const [provider, ...modelParts] = (key || '').split('::');
+  const fallback = defaultModelKeyFromSettings(settings.value);
+  if (!provider || modelParts.length === 0) {
+    return parseModelKey(fallback === key ? 'deepseek::deepseek-chat' : fallback);
+  }
+  return {
+    provider,
+    model: modelParts.join('::') || 'deepseek-chat',
+  };
+}
+
+function defaultModelKeyFromSettings(currentSettings: UserSettingsResponse | null) {
+  const provider = currentSettings?.defaultProvider || 'deepseek';
+  const model = provider === 'glm'
+    ? (currentSettings?.glmModel || 'glm-4.5-air')
+    : (currentSettings?.deepseekModel || 'deepseek-chat');
+  return toModelKey(provider, model);
+}
+
+function formatProviderName(provider: string) {
+  return provider.toLowerCase() === 'glm' ? 'GLM' : 'DeepSeek';
+}
+
+function formatSessionUpdatedAt(value: string) {
+  const updatedAt = new Date(value);
+  if (Number.isNaN(updatedAt.getTime())) {
+    return '未知';
+  }
+  const diffMs = Date.now() - updatedAt.getTime();
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (diffMs < minute) {
+    return '刚刚';
+  }
+  if (diffMs < hour) {
+    return `${Math.floor(diffMs / minute)} 分钟前`;
+  }
+  if (diffMs < day) {
+    return `${Math.floor(diffMs / hour)} 小时前`;
+  }
+  if (diffMs < 7 * day) {
+    return `${Math.floor(diffMs / day)} 天前`;
+  }
+  return updatedAt.toLocaleDateString();
 }
 
 function goToNavigation(navigationUrl: string) {

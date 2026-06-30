@@ -66,4 +66,25 @@ public class AgentSession {
     public Boolean getRagDisabled() { return ragDisabled; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
+
+    public void updateTitle(String title) {
+        this.title = title;
+    }
+
+    public void updateModel(String modelProviderSnapshot, String modelSnapshot) {
+        this.modelProviderSnapshot = modelProviderSnapshot;
+        this.modelSnapshot = modelSnapshot;
+    }
+
+    public void updateMaxSteps(Integer maxSteps) {
+        this.maxSteps = maxSteps;
+    }
+
+    public void updateRagDisabled(Boolean ragDisabled) {
+        this.ragDisabled = ragDisabled;
+    }
+
+    public void touch() {
+        this.updatedAt = Instant.now();
+    }
 }

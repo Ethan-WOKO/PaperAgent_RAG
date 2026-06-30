@@ -450,3 +450,123 @@
 - 检查 `suggested.bib`：
   - 保留强 evidence 推荐。
   - 不再混入 CP2K、泛 6G、O-RAN 等低相关 supplemental 候选。
+
+## 2026-06-29：Critic/Repairer 与日常文献检索验证记录
+
+### 自动化结果
+- ✅ `mvn -pl yanban-api -am -Dtest=ConversationIntentRouterServiceTest,AgentControllerIntegrationTest -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false test`：通过，9 tests。
+- ✅ `mvn -pl yanban-api -am test`：通过，33 tests；H2 下 Flyway V1--V11 迁移成功。
+- ✅ `mvn -pl yanban-paper test`：通过，33 tests。
+
+### 已覆盖行为
+- ✅ `/literature FDA-MIMO jamming 1篇 bibtex` 在 Agent REST 发送消息路径中直接返回文献结果与 BibTeX，并持久化 user/assistant 两条消息。
+- ✅ 论文润色跳转意图仍优先返回 `/paper`。
+- ✅ 弱语义文献意图只提示确认，不直接检索。
+- ✅ 普通 `references` 泛化问题不再误触发文献检索。
+- ✅ `PaperAssembleService` 仅采用 `POLISHED` 章节；`REVIEW_FAILED` 等未通过章节不会进入最终 tex。
+
+### 后续人工复测建议
+- [ ] 用 `reference/IEEE_TAES_regular_template_latex_v6.tex` 重新跑完整论文润色任务。
+- [ ] 对比新 `polished.tex` 与原文，重点检查：原意保持、重复扩写、phase-only projection 概念漂移、变量符号一致性、结构命令不变性。
+- [ ] 编译新 `polished.tex`，检查 undefined ref/cite、Unicode dash、overfull hbox 等 warning 是否较旧产物改善。
+- [ ] 在聊天页输入 `/literature polarimetric FDA-MIMO self-protection jamming 5篇 bibtex`，确认能返回可读文献列表。
+- [ ] 输入“这个方向最近有什么工作 FDA-MIMO jamming”，确认先出现确认提示而非直接检索。
+
+## 2026-06-29：Flyway V10 checksum 修复验证
+
+### 自动化结果
+- ✅ `mvn -pl yanban-api -am -Dtest=AgentControllerIntegrationTest -DfailIfNoTests=false -Dsurefire.failIfNoSpecifiedTests=false test`：通过，5 tests。
+- ✅ `mvn -pl yanban-api -am test`：通过，33 tests。
+
+### 人工复测点
+- [ ] 后端重新构建/重启后，真实 MySQL 启动不再出现 `Migration checksum mismatch for migration version 10`。
+- [ ] 如仍出现 mismatch，先确认运行 classpath 中的 V10 是否已经恢复原始写法；不要先执行 `flyway repair`。
+
+## 2026-06-30：深色高级 UI 第一版验证记录
+
+### 自动化/构建结果
+- ✅ `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅 Vite chunk size warning。
+
+### 浏览器手测点
+- [ ] 打开 `/chat`，确认三栏布局正常：会话列表、聊天区、Research Agent 右栏。
+- [ ] 在 `/chat` 发送普通消息和 `/literature ...`，确认消息气泡、代码块、BibTeX 块可读。
+- [ ] 切换主题按钮可用；当前默认进入深色主题。
+- [ ] 打开 `/paper`，确认上传区、进度区、结果中心在新深色风格下可读，右侧 sticky 不遮挡。
+- [ ] 打开 `/knowledge-base`、`/settings`，确认旧页面在新全局布局中没有明显溢出。
+
+## 2026-06-30：Chat 工作台细节打磨验证记录
+
+### 自动化/构建结果
+- ✅ `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅 Vite chunk size warning。
+
+### 浏览器手测点
+- [ ] `/chat` 无消息时 composer 是否贴近主卡片底部。
+- [ ] `/chat` 长消息时仅消息区滚动，composer 保持底部固定。
+- [ ] Recent Conversations 是否比上一版更靠左且不过度贴边。
+- [ ] 顶部工具区在 light/dark 下 pill 样式可读。
+- [ ] 右侧 Agent 面板是否不再过度抢眼，窄屏时仍按媒体查询折叠到下方。
+
+## 2026-06-30：Chat 消息左右对齐验证记录
+
+### 自动化/构建结果
+- ✅ `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅 Vite chunk size warning。
+
+### 浏览器手测点
+- [ ] 用户消息整组靠右，显示为「蓝色气泡 + 右侧头像」。
+- [ ] 助手消息靠左，显示为「左侧头像 + 白/暗色气泡」。
+- [ ] 长用户消息不会横跨过宽，最大宽度较助手消息更窄。
+- [ ] system/tool 折叠过程消息仍靠左显示。
+
+## 2026-06-30：Chat 模型选择与会话管理验证记录
+
+### 自动化/构建结果
+- ✅ `cd private-helper-agent && cmd.exe /c mvn -pl yanban-api -am -Dtest=AgentControllerIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false test`：通过，7 tests。
+- ✅ `cd private-helper-agent && cmd.exe /c mvn -pl yanban-api -am test`：通过，35 tests。
+- ✅ `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅 Vite chunk size warning。
+
+### 浏览器手测点
+- [ ] `/chat` 输入框上方/附近可选择模型，选项来自 Settings 当前 deepseek/glm 模型配置。
+- [ ] 创建新会话后使用当前选中的模型。
+- [ ] 切换已有会话模型后，后续消息使用新模型。
+- [ ] 会话列表显示最近更新时间，不显示模型名。
+- [ ] 会话 `⋯` 菜单可以重命名，空标题不能保存。
+- [ ] 删除当前会话后自动切换到下一个会话；无会话时消息区清空。
+- [ ] 新会话发送第一条消息后标题自动从“新会话”变成语义标题。
+
+## 2026-06-30：Focus 控件和折叠动画验证记录
+
+### 自动化/构建结果
+- ✅ `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅 Vite chunk size warning。
+
+### 浏览器手测点
+- [ ] 左下角用户区显示 `Sign out ↗`，点击后可退出登录。
+- [ ] `/chat` 点击 Recent Conversations 右侧 `⟨` 后左侧列表隐藏，中间对话扩展。
+- [ ] 左侧隐藏后点击 `☰` 可恢复会话列表。
+- [ ] 点击 Research Agent 右侧 `⟩` 后右侧面板隐藏，中间对话扩展。
+- [ ] 右侧隐藏后点击 `✦` 可恢复 Agent 面板。
+- [ ] 点击顶部中下部 `⌃` 后 Research Copilot 顶部区域隐藏，工作区向上扩展。
+- [ ] 顶部隐藏后点击 `⌄` 可恢复顶部区域。
+- [ ] 刷新页面后折叠状态保持。
+
+## 2026-06-30：折叠状态动态宽度验证记录
+
+### 自动化/构建结果
+- ✅ `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅 Vite chunk size warning。
+
+### 浏览器手测点
+- [ ] 左右都展开时，Chat 内容保持原高级工作台阅读宽度。
+- [ ] 仅折叠左侧时，intro/messages/composer 向左扩展，左侧不再大面积空白。
+- [ ] 仅折叠右侧时，intro/messages/composer 向右扩展，右侧不再大面积空白。
+- [ ] 左右都折叠时，Chat 内容接近全宽但保留安全边距。
+- [ ] assistant 和 user 气泡在折叠状态下宽度随内容区扩大。
+
+## 2026-06-30：Chat/Paper 滚动修复验证记录
+
+### 自动化/构建结果
+- ✅ `cd private-helper-agent/frontend && cmd.exe /c pnpm build`：通过，仅 Vite chunk size warning。
+
+### 浏览器手测点
+- [ ] `/paper` 页面鼠标滚轮可向下看到完整上传参数、进度和结果中心。
+- [ ] `/chat` 普通状态下消息区可滚动查看历史。
+- [ ] `/chat` 顶部隐藏、左侧隐藏、右侧隐藏、双侧隐藏时消息区仍可滚动。
+- [ ] `/chat` 底部 composer 不遮挡最后一条消息。

@@ -229,12 +229,27 @@ public class PaperTaskService {
             case "review_report" -> "review-report" + suffix + ".md";
             case "retrieved_literature_json" -> "retrieved-literature" + suffix + ".json";
             case "retrieved_literature_md" -> "retrieved-literature" + suffix + ".md";
+            case "source_bib" -> metadataFilename(artifact, "source-bibliography" + suffix + ".bib");
             default -> artifact.getType() + suffix + ".txt";
         };
     }
 
+    private String metadataFilename(PaperTaskArtifact artifact, String fallback) {
+        String metadata = artifact.getMetadataJson();
+        if (metadata == null || metadata.isBlank()) return fallback;
+        String marker = "\"filename\":\"";
+        int start = metadata.indexOf(marker);
+        if (start < 0) return fallback;
+        start += marker.length();
+        int end = metadata.indexOf('"', start);
+        if (end <= start) return fallback;
+        String filename = metadata.substring(start, end).replace("\\\"", "\"").replace("\\\\", "\\").trim();
+        if (filename.isBlank() || filename.contains("/") || filename.contains("\\")) return fallback;
+        return filename;
+    }
+
     private Set<String> downloadableArtifactTypes() {
-        return Set.of("polished_tex", "suggested_bib", "suggested_bib_novel", "review_report", "retrieved_literature_json", "retrieved_literature_md");
+        return Set.of("polished_tex", "suggested_bib", "suggested_bib_novel", "review_report", "retrieved_literature_json", "retrieved_literature_md", "source_bib");
     }
 
     private String resolveTitle(MultipartFile file) {

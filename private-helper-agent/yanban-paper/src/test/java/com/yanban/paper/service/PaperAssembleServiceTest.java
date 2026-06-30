@@ -115,10 +115,10 @@ class PaperAssembleServiceTest {
         assertThat(countOccurrences(result.polishedTex(), "\\end{document}")).isEqualTo(1);
         assertThat(result.suggestedBib()).contains("@article{alicesmith2024", "Grounded RAG Work", "10.1000/rag");
         assertThat(result.reviewReport()).contains("Paper Review Report", "Use grounded evidence", "AI-assisted self-check");
-        assertThat(result.artifacts()).hasSize(3);
+        assertThat(result.artifacts()).hasSize(4);
         assertThat(artifacts.findByTaskIdOrderByCreatedAt(task.getId())).extracting(PaperTaskArtifact::getType)
-                .containsExactly("polished_tex", "suggested_bib", "review_report");
-        assertThat(storage.contentsByKey).hasSize(3);
+                .containsExactly("polished_tex", "suggested_bib", "suggested_bib_novel", "review_report");
+        assertThat(storage.contentsByKey).hasSize(4);
         assertThat(tasks.findById(task.getId()).orElseThrow().getStatus()).isEqualTo("COMPLETED");
     }
 
@@ -130,9 +130,9 @@ class PaperAssembleServiceTest {
         PaperAssembleResult result = assembleService.assemble(task.getId(), document(), false);
 
         assertThat(result.polishedTex()).isBlank();
-        assertThat(result.artifacts()).hasSize(2);
+        assertThat(result.artifacts()).hasSize(3);
         assertThat(artifacts.findByTaskIdOrderByCreatedAt(task.getId())).extracting(PaperTaskArtifact::getType)
-                .containsExactly("suggested_bib", "review_report");
+                .containsExactly("suggested_bib", "suggested_bib_novel", "review_report");
     }
 
     private LatexDocument document() {

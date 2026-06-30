@@ -5,7 +5,9 @@ import jakarta.validation.Valid;
 import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -33,6 +35,20 @@ public class AgentController {
     @GetMapping
     public List<AgentSessionResponse> listSessions(@AuthenticationPrincipal JwtUser currentUser) {
         return agentService.listSessions(currentUser.id());
+    }
+
+    @PatchMapping("/{sessionId}")
+    public AgentSessionResponse updateSession(@AuthenticationPrincipal JwtUser currentUser,
+                                              @PathVariable Long sessionId,
+                                              @Valid @RequestBody UpdateSessionRequest request) {
+        return agentService.updateSession(currentUser.id(), sessionId, request);
+    }
+
+    @DeleteMapping("/{sessionId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteSession(@AuthenticationPrincipal JwtUser currentUser,
+                              @PathVariable Long sessionId) {
+        agentService.deleteSession(currentUser.id(), sessionId);
     }
 
     @GetMapping("/{sessionId}/messages")

@@ -2,7 +2,7 @@
 
 > 文档作用概述：记录**实现后的架构现状、关键设计取舍、已知技术偏差与模块职责**。当代码实现与最初设计相比出现结构性差异时，更新本文件；不要在这里维护逐步执行计划。
 >
-> 更新时间：2026-06-14
+> 更新时间：2026-06-29
 
 ## 1. 当前工程结构
 
@@ -846,3 +846,134 @@ paper_task_artifacts(polished_tex/suggested_bib/review_report/parsed_model)
 ### 18.8 交付物与两模式
 
 三件套：润色后 .tex + 审查报告（每条挂真实引用 + 免责声明）+ suggested.bib。基础版（不改原文/原 bib 只推荐）/进阶版（改原文 + 自动补 cite，采纳后过静态 lint：cite key 存在、括号/环境配平、受保护元素数量一致、无残留占位符）。在线预览为源码级高亮 diff + 逐条勾选采纳。
+
+## 19. 论文润色 Critic/Repairer 与日常文献检索路由（2026-06-29）
+
+### 19.1 分章润色质量闸门
+
+当前论文润色不替换整条主链路，而是在 `PaperSectionPolishService` 中加入原文对照审查与修复闭环：
+
+```text
+mask original section
+  -> section/introduction polish prompt
+  -> placeholder + structural command + lint + translation guard
+  -> original-aware section-review critic
+  -> if failed: section-repair minimal repair
+  -> revalidate + rereview
+  -> persist POLISHED only when score/pass threshold satisfied
+```
+
+关键约束：
+- `section-polish.md` / `introduction-polish.md` 默认保守润色，不允许无依据新增贡献、变量、公式、citation 或列表化结构。
+- `section-review.md` 同时接收原文、润色文和 diff summary，重点判断原意保持、unsupported content、LaTeX 结构命令变化、重复扩写与过度改写。
+- `section-repair.md` 只做最小修复，优先删除/回退 critic 指出的新增或漂移内容。
+- 代码层继续做硬校验：placeholder 集合、结构命令序列、LaTeX lint、异常翻译检测。
+- `PaperAssembleService` 仅采用 `POLISHED` 章节；`REVIEW_FAILED` / `FAILED_KEEP_ORIGINAL` 等状态进入报告，不进入最终改写 tex。
+
+### 19.2 普通对话文献检索入口
+
+新增轻量文献检索路径用于日常聊天，不绑定完整 `PaperTask`：
+
+```text
+AgentService.sendMessage
+  -> ConversationIntentRouterService
+      -> PaperRevisionIntentService: /paper navigation
+      -> literature intent: AdHocLiteratureSearchService
+  -> otherwise HarnessEngine
+       tools include search_literature / search_knowledge / echo ...
+```
+
+`AdHocLiteratureSearchService` 复用 `LiteratureSource` providers：
+- 输入：query、limit、yearFrom。
+- 输出：去重后的 `AdHocLiteratureItem`，包含 title/authors/year/venue/doi/arXiv/OpenAlex/url/abstract/source/score/BibTeX。
+- 去重 identity：DOI > arXiv > OpenAlex > S2 > title hash。
+- 排序：query token overlap 为主，辅以 citation、近年、DOI/arXiv、abstract 可用性。
+
+`search_literature` 是普通 function-calling tool：
+- 参数：`query` 必填，`topK`、`yearFrom`、`includeBibtex` 可选。
+- 返回 JSON：query、raw/unique/source 统计、sourceFailures、items、可选 BibTeX。
+
+### 19.3 意图路由置信策略
+
+当前第一版规则：
+- 论文润色关键词优先级最高，返回 `/paper` 导航。
+- 显式 `/literature`、`/lit`、`/文献检索`、`@literature`：高置信，直接检索。
+- 强文献关键词（找文献、推荐论文、bibtex、recent papers、find papers 等）：直接检索。
+- 弱语义模式（“有没有人做过”“最近有什么工作”“这个方向”“sota”等）：只返回确认提示，不直接检索。
+- 裸英文 `references` 不再作为触发关键词，避免普通编程/语言问题误判。
+
+该路由是普通会话的前置 shortcut；未命中的消息仍进入 Harness，可由模型通过 `search_literature` 工具自主检索。
+
+## 20. 前端 Research Workspace UI 架构（2026-06-30）
+
+当前前端 UI 第一版从普通顶部导航改为更接近 AI Research Copilot 的工作台结构：
+
+```text
+AppLayout
+  ├─ left sidebar: brand / navigation / quick actions / user
+  └─ workspace
+       ├─ topbar: route title / task actions / Agent Mode / theme toggle
+       └─ page content
+```
+
+设计取舍：
+- 默认进入深色高级主题，视觉参考 ScholarAI / Aether / ResearchFlow 风格。
+- 保留 `useTheme` 的 light/dark 切换能力；浅色主题变量已保留，后续单独精修浅色版。
+- `ChatPage` 当前采用三栏：会话列表、Chat Workspace、Research Agent Activity。
+- 右侧 Agent Activity 目前是 UI 壳，展示 Agent Plan、Tools & Execution、Execution Trace；真实任务拆解、工具执行状态和计划推进后续再接后端/前端状态模型。
+- `PaperPage` 暂时不重写业务结构，主要通过全局设计系统和现有类名覆盖增强视觉；后续可进一步拆成 Upload / Workflow / Result Center 三个清晰组件。
+
+第一版目标是先建立统一高级视觉系统，不改变核心业务 API 和数据流。
+
+## 21. Chat 会话模型选择与自动标题（2026-06-30）
+
+Chat 会话现在采用“Settings 默认模型 + 会话级模型快照”的组合：
+
+```text
+Settings
+  ├─ defaultProvider
+  ├─ deepseekModel
+  └─ glmModel
+
+AgentSession
+  ├─ modelProviderSnapshot
+  ├─ modelSnapshot
+  ├─ title
+  ├─ ragDisabled
+  └─ updatedAt
+```
+
+前端策略：
+- Chat composer 附近显示 Model selector，选项来自 Settings 中 deepseek/glm 当前配置。
+- 创建新会话时使用当前 selector 的 provider/model。
+- 切换已有会话模型时调用 `PATCH /agent/sessions/{id}` 更新会话模型快照。
+- 会话列表只展示标题和最近更新时间，不展示模型名。
+- 会话 `⋯` 菜单支持重命名和删除。
+
+后端策略：
+- `PATCH /api/v1/agent/sessions/{sessionId}`：可更新标题、模型、maxSteps、RAG 设置。
+- `DELETE /api/v1/agent/sessions/{sessionId}`：删除会话及其消息。
+- `GET /api/v1/agent/sessions`：按 `updatedAt desc` 返回。
+- 发送消息后 touch 会话更新时间。
+- 当会话标题仍是默认标题且发送的是第一条用户消息时，使用聚合 `chatModelProvider` 根据首条消息生成简洁标题；生成失败时使用首条消息截断 fallback。
+
+当前自动标题是在发送消息事务内同步完成；后续如需降低 WebSocket 完成延迟，可改为后台异步标题生成事件。
+
+## 22. Workspace Focus 折叠状态（2026-06-30）
+
+前端工作台现在支持三类可记忆折叠状态：
+
+```text
+localStorage
+  ├─ yanban.app.topbarCollapsed       // 顶部 Research Copilot 区域
+  ├─ yanban.chat.sessionsCollapsed    // Chat 左侧会话列表
+  └─ yanban.chat.agentCollapsed       // Chat 右侧 Research Agent
+```
+
+交互约定：
+- 左下角用户区登出使用明确文案 `Sign out ↗`。
+- Chat 左侧面板打开时使用 `⟨` 隐藏，隐藏后使用 `☰` 恢复。
+- Chat 右侧 Agent 打开时使用 `⟩` 隐藏，隐藏后使用 `✦` 恢复。
+- 顶部 header 打开时使用中下部 `⌃` 隐藏，隐藏后使用居中 `⌄` 恢复。
+- 左右面板隐藏时通过 `grid-template-columns` 过渡让中间 Chat 自动扩展，同时配合 opacity / transform / blur 形成柔和动画。
+- 顶部 header 隐藏时压缩高度并淡出，`app-content-shell` 自动向上释放空间。

@@ -17,6 +17,7 @@ class PaperPromptServiceTest {
                 "research-profile",
                 "section-polish",
                 "section-review",
+                "section-repair",
                 "literature-extract",
                 "gap-analysis",
                 "relatedwork-gen",
@@ -33,6 +34,8 @@ class PaperPromptServiceTest {
                 "researchProfile", "{problem: demo}",
                 "sectionTitle", "Introduction",
                 "scoreThreshold", 80,
+                "diffSummary", "{}",
+                "originalText", "Original section.",
                 "sectionText", "This is a section."
         ));
 

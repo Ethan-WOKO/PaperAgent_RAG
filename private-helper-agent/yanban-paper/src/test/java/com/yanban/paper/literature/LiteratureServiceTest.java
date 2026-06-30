@@ -17,6 +17,7 @@ import com.yanban.paper.service.PaperStorageService;
 import com.yanban.paper.service.ResearchProfileResult;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringBootConfiguration;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
@@ -52,6 +53,19 @@ class LiteratureServiceTest {
         @Bean
         LiteratureQueryPlanner literatureQueryPlanner() {
             return new FakeQueryPlanner();
+        }
+
+        @Bean
+        LiteratureCardAnalysisService literatureCardAnalysisService() {
+            return Mockito.mock(LiteratureCardAnalysisService.class);
+        }
+
+        @Bean
+        LiteratureRerankService literatureRerankService() {
+            LiteratureRerankService service = Mockito.mock(LiteratureRerankService.class);
+            Mockito.when(service.rerank(Mockito.any(), Mockito.any(), Mockito.anyList(), Mockito.anyInt(), Mockito.anyInt()))
+                    .thenReturn(LiteratureRerankService.RerankResult.empty());
+            return service;
         }
 
         @Bean
@@ -108,7 +122,7 @@ class LiteratureServiceTest {
                 "{}"
         );
 
-        List<LiteratureSearchResult> selected = literatureService.retrieveForTask(99L, profile, 10, 1);
+        List<LiteratureSearchResult> selected = literatureService.retrieveForTask(99L, profile, 10, 1, 1);
 
         assertThat(selected).hasSize(1);
         assertThat(selected.get(0).card().getDoi()).isEqualTo("10.1000/rag");
@@ -117,7 +131,7 @@ class LiteratureServiceTest {
         assertThat(savedRelations).hasSize(2);
         assertThat(savedRelations.get(0).getSelected()).isTrue();
         assertThat(savedRelations.get(0).getRelevanceScore()).isGreaterThanOrEqualTo(savedRelations.get(1).getRelevanceScore());
-        assertThat(analyses.findByTaskId(99L).orElseThrow().getConceptLadderJson()).contains("advocacy", "Hybrid retrieval for RAG");
+        assertThat(analyses.findByTaskId(99L).orElseThrow().getConceptLadderJson()).contains("general", "Hybrid retrieval for RAG");
         assertThat(artifacts.findByTaskIdOrderByCreatedAt(99L)).extracting(PaperTaskArtifact::getType)
                 .contains("retrieved_literature_json", "retrieved_literature_md");
     }
