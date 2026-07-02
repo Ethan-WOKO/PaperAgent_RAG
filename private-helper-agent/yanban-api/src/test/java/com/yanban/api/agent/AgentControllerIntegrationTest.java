@@ -160,6 +160,29 @@ class AgentControllerIntegrationTest {
     }
 
     @Test
+    void commonKnowledgeQuestionDoesNotExposeToolsToModel() throws Exception {
+        when(chatModelProvider.providerName()).thenReturn("mock");
+        when(chatModelProvider.chat(any()))
+                .thenReturn(new ChatResponse(ChatMessage.assistant("Watermelon is hydrating."), "stop", null));
+        String token = registerAndGetToken("agent_user_common_knowledge");
+        long sessionId = createSession(token, "Common Knowledge");
+
+        mockMvc.perform(post("/api/v1/agent/sessions/{id}/messages", sessionId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"\\u897f\\u74dc\\u7684\\u529f\\u6548\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.steps").value(1))
+                .andExpect(jsonPath("$.assistantContent").value("Watermelon is hydrating."))
+                .andExpect(jsonPath("$.messages.length()").value(2));
+
+        ArgumentCaptor<ChatRequest> captor = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(chatModelProvider).chat(captor.capture());
+        assertThat(captor.getValue().tools()).isNull();
+    }
+
+    @Test
     void persistedToolMessagesKeepToolCallIdInNextModelRequest() throws Exception {
         when(chatModelProvider.providerName()).thenReturn("mock");
         when(chatModelProvider.chat(any()))

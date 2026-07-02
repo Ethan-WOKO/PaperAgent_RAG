@@ -97,7 +97,25 @@ class HarnessEngineTest {
         List<String> streamed = new ArrayList<>();
 
         HarnessResult result = engine.run(
-                new HarnessRequest(List.of(), 1001L, "hello", "mock", "mock-model", null, null, 20, true, null, null, null),
+                new HarnessRequest(
+                        List.of(),
+                        1001L,
+                        "hello",
+                        "mock",
+                        "mock-model",
+                        null,
+                        null,
+                        20,
+                        true,
+                        null,
+                        null,
+                        null,
+                        List.of(),
+                        0,
+                        1,
+                        null,
+                        null
+                ),
                 streamed::add
         );
 
@@ -139,6 +157,36 @@ class HarnessEngineTest {
     }
 
     @Test
+    void suppressesStreamingToolCallPreamble() {
+        StreamingMockProvider provider = new StreamingMockProvider(List.of(
+                List.of(
+                        ChatChunk.token("我来搜索一下。"),
+                        ChatChunk.toolCallDelta(new ChatChunk.ToolCallDelta(0, "call-1", "function", "echo", null)),
+                        ChatChunk.toolCallDelta(new ChatChunk.ToolCallDelta(0, null, null, null, "{\"message\":\"hello\"}")),
+                        ChatChunk.done("tool_calls")
+                ),
+                List.of(
+                        ChatChunk.token("final"),
+                        ChatChunk.done("stop")
+                )
+        ));
+        HarnessEngine engine = new HarnessEngine(provider, new ToolRegistry().register(new EchoToolExecutor(objectMapper)), objectMapper);
+        List<String> streamed = new ArrayList<>();
+
+        HarnessResult result = engine.run(
+                new HarnessRequest(List.of(), 1001L, "search", "mock", "mock-model", null, null, 20, true, null, null, null),
+                streamed::add
+        );
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.assistantContent()).isEqualTo("final");
+        assertThat(streamed).containsExactly("final");
+        assertThat(result.messages().get(1).role()).isEqualTo("assistant");
+        assertThat(result.messages().get(1).content()).isNull();
+        assertThat(result.messages().get(1).toolCalls()).hasSize(1);
+    }
+
+    @Test
     void usesKnowledgeContextWhenRagEnabled() {
         MockProvider provider = new MockProvider(List.of(
                 new ChatResponse(ChatMessage.assistant("参考知识库回答"), "stop", null)
@@ -146,7 +194,9 @@ class HarnessEngineTest {
         FakeKnowledgeContextProvider knowledge = new FakeKnowledgeContextProvider(List.of(
                 new KnowledgeSnippet(1L, "paper.md", 0, "alpha knowledge", 1.0)
         ));
-        HarnessEngine engine = new HarnessEngine(provider, new ToolRegistry().register(new EchoToolExecutor(objectMapper)), objectMapper, knowledge);
+        HarnessEngine engine = new HarnessEngine(provider, new ToolRegistry()
+                .register(new EchoToolExecutor(objectMapper))
+                .register(new FakeSearchKnowledgeToolExecutor(objectMapper)), objectMapper, knowledge);
 
         HarnessResult result = engine.run(new HarnessRequest(List.of(), 1001L, "alpha", "mock", "mock-model", null, null, 20, false, null, null, null));
 
@@ -287,7 +337,8 @@ class HarnessEngineTest {
         assertThat(provider.requests).hasSize(3);
         assertThat(provider.requests.get(2).tools()).isNull();
         assertThat(result.messages()).extracting(ChatMessage::role)
-                .containsExactly("user", "assistant", "tool", "assistant", "system", "assistant");
+                .containsExactly("user", "assistant", "tool", "assistant", "tool", "system", "assistant");
+        assertThat(result.messages().get(4).content()).contains("Duplicate tool call blocked");
     }
 
     @Test
@@ -331,7 +382,8 @@ class HarnessEngineTest {
         assertThat(provider.requests).hasSize(2);
         assertThat(provider.requests.get(1).tools()).isNull();
         assertThat(result.messages()).extracting(ChatMessage::role)
-                .containsExactly("user", "assistant", "tool", "system", "assistant");
+                .containsExactly("user", "assistant", "tool", "tool", "system", "assistant");
+        assertThat(result.messages().get(3).content()).contains("Tool-call budget exceeded");
     }
 
     private static class FakeKnowledgeContextProvider implements KnowledgeContextProvider {
@@ -382,6 +434,28 @@ class HarnessEngineTest {
                     .put("url", "https://example.com/openai")
                     .put("snippet", "Official model release notes.");
             return ToolResult.success(call.id(), call.name(), output);
+        }
+    }
+
+    private static class FakeSearchKnowledgeToolExecutor implements ToolExecutor {
+        private final ObjectMapper objectMapper;
+
+        private FakeSearchKnowledgeToolExecutor(ObjectMapper objectMapper) {
+            this.objectMapper = objectMapper;
+        }
+
+        @Override
+        public ToolDefinition definition() {
+            return new ToolDefinition(
+                    "search_knowledge",
+                    "Search private knowledge",
+                    objectMapper.createObjectNode().put("type", "object")
+            );
+        }
+
+        @Override
+        public ToolResult execute(com.yanban.core.tool.ToolCall call) {
+            return ToolResult.success(call.id(), call.name(), objectMapper.createObjectNode());
         }
     }
 

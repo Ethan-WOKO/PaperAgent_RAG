@@ -2,6 +2,9 @@ param(
     [string]$BaseUrl = "http://localhost:8080",
     [int]$TimeoutSec = 120,
     [string[]]$Providers = @("deepseek"),
+    [string]$DeepSeekModel = "deepseek-v4-flash",
+    [string]$GlmModel = "glm-4.5-air",
+    [string]$EvalInviteCode = $env:EVAL_INVITE_CODE,
     [ValidateSet("markdown", "mixed")]
     [string]$FixtureMode = "markdown",
     [switch]$RunPlanExecution,
@@ -178,7 +181,11 @@ function Contains-Any {
 
 function Get-Token {
     param([string]$Username, [string]$Password = "password123")
-    $register = Invoke-JsonApi -Method "POST" -Path "/api/v1/auth/register" -Body @{ username = $Username; password = $Password } -Timeout 30
+    $registerBody = @{ username = $Username; password = $Password }
+    if ($script:ResolvedEvalInviteCode) {
+        $registerBody.inviteCode = $script:ResolvedEvalInviteCode
+    }
+    $register = Invoke-JsonApi -Method "POST" -Path "/api/v1/auth/register" -Body $registerBody -Timeout 30
     if ($register.Status -eq 201 -and $register.Body.accessToken) {
         return $register.Body.accessToken
     }
@@ -186,7 +193,7 @@ function Get-Token {
     if ($login.Status -eq 200 -and $login.Body.accessToken) {
         return $login.Body.accessToken
     }
-    throw "Cannot register/login $Username. register=$($register.Status) login=$($login.Status)"
+    throw "Cannot register/login $Username. register=$($register.Status) registerBody=$(Short-Text $register.Raw 180) login=$($login.Status) loginBody=$(Short-Text $login.Raw 180)"
 }
 
 function New-Session {
@@ -195,7 +202,7 @@ function New-Session {
         [string]$Title,
         [bool]$RagDisabled = $false,
         [string]$Provider = "deepseek",
-        [string]$Model = "deepseek-chat",
+        [string]$Model = $script:DeepSeekModel,
         [int]$MaxSteps = 6
     )
     $response = Invoke-JsonApi -Method "POST" -Path "/api/v1/agent/sessions" -Token $Token -Body @{
@@ -427,7 +434,7 @@ function Get-ProviderConfig {
         "deepseek" {
             return [pscustomobject]@{
                 Name = "deepseek"
-                Model = "deepseek-chat"
+                Model = $script:DeepSeekModel
                 ApiKey = $env:DEEPSEEK_API_KEY
                 KeyName = "DEEPSEEK_API_KEY"
             }
@@ -435,7 +442,7 @@ function Get-ProviderConfig {
         "glm" {
             return [pscustomobject]@{
                 Name = "glm"
-                Model = "glm-4.5-air"
+                Model = $script:GlmModel
                 ApiKey = $env:GLM_API_KEY
                 KeyName = "GLM_API_KEY"
             }
@@ -447,13 +454,19 @@ function Get-ProviderConfig {
 }
 
 function Set-UserSettings {
-    param([string]$Token, [string]$Provider, [string]$ProviderKey)
+    param(
+        [string]$Token,
+        [string]$Provider,
+        [string]$ProviderKey,
+        [string]$DeepSeekModelName = $script:DeepSeekModel,
+        [string]$GlmModelName = $script:GlmModel
+    )
     $settingsBody = @{
         defaultProvider = $Provider
         deepseekApiKey = $env:DEEPSEEK_API_KEY
         glmApiKey = $env:GLM_API_KEY
-        deepseekModel = "deepseek-chat"
-        glmModel = "glm-4.5-air"
+        deepseekModel = $DeepSeekModelName
+        glmModel = $GlmModelName
         deepseekTemperature = 0.2
         maxSteps = 6
         ragDefaultEnabled = $true
@@ -625,7 +638,7 @@ function Run-ProviderEval {
     Add-Result -Id "SETUP-USERS" -Provider $Provider -Status "PASS" -Score 5 -DurationMs 0 -Note "registered temporary eval users"
 
     foreach ($token in @($aliceToken, $bobToken)) {
-        $settings = Set-UserSettings -Token $token -Provider $Provider -ProviderKey $config.ApiKey
+        $settings = Set-UserSettings -Token $token -Provider $Provider -ProviderKey $config.ApiKey -DeepSeekModelName $script:DeepSeekModel -GlmModelName $script:GlmModel
         Add-BooleanResult -Id "SETUP-SETTINGS" -Provider $Provider -Pass ($settings.Status -eq 200) -DurationMs $settings.DurationMs -Note "settings configured" -Excerpt $settings.Raw -Error $settings.Error
     }
 
@@ -679,6 +692,20 @@ function Run-ProviderEval {
     $explainContent = [string]$explain.Body.assistantContent
     $explainPass = $explain.Status -eq 200 -and $explainContent.Length -gt 20 -and (Contains-Any -Text $explainContent -Needles @("retrieval", "generation", "knowledge", "RAG"))
     Add-BooleanResult -Id "P1-CHAT-01" -Provider $Provider -Pass $explainPass -PassScore 4 -FailScore 2 -DurationMs $explain.DurationMs -Note "plain RAG explanation quality smoke test" -Excerpt $explainContent -Error $explain.Error
+
+    $common = Send-Message -Token $aliceToken -SessionId $chatSession -Content "List three common benefits of watermelon. Answer directly without browsing unless it is truly needed." -RagDisabled $true -Timeout 120
+    $commonContent = [string]$common.Body.assistantContent
+    $commonMessages = @($common.Body.messages)
+    $commonLooksDirect = -not ($commonContent -match '(?i)\b(search|searched|browse|browsed|web|source|sources|according to search)\b')
+    $commonPass = $common.Status -eq 200 -and $commonContent.Length -gt 20 -and $commonMessages.Count -eq 2 -and $common.Body.steps -eq 1 -and $commonLooksDirect
+    Add-BooleanResult -Id "P0-CHAT-03" -Provider $Provider -Pass $commonPass -DurationMs $common.DurationMs -Note "common knowledge should answer in one assistant message without tool-search preamble" -Excerpt $commonContent -Error $common.Error
+
+    $identitySession = New-Session -Token $aliceToken -Title "Eval Identity $providerRun" -RagDisabled $true -Provider $Provider -Model $config.Model
+    $identity = Send-Message -Token $aliceToken -SessionId $identitySession -Content "What model are you?" -RagDisabled $true -Timeout 60
+    $identityContent = [string]$identity.Body.assistantContent
+    $identityLeakFree = -not ($identityContent -match '(?i)provider=|model=|backend|runtime|prompt|guard|internal|harness')
+    $identityPass = $identity.Status -eq 200 -and $identity.Body.steps -eq 0 -and $identityContent -match [regex]::Escape($config.Model) -and $identityLeakFree
+    Add-BooleanResult -Id "P0-IDENTITY-01" -Provider $Provider -Pass $identityPass -DurationMs $identity.DurationMs -Note "identity question should be handled without model call or internal debug wording" -Excerpt $identityContent -Error $identity.Error
 
     $rag1 = Send-Message -Token $aliceToken -SessionId $aliceSession -Content $keys.mentorKey -RagDisabled $false -Timeout 120
     $rag1Content = [string]$rag1.Body.assistantContent
@@ -779,6 +806,14 @@ function Normalize-Providers {
 }
 
 Load-DotEnv
+$script:ResolvedEvalInviteCode = $null
+if ($EvalInviteCode) {
+    $script:ResolvedEvalInviteCode = $EvalInviteCode.Trim()
+} elseif ($env:EVAL_INVITE_CODE) {
+    $script:ResolvedEvalInviteCode = $env:EVAL_INVITE_CODE.Trim()
+} elseif ($env:INVITE_CODES) {
+    $script:ResolvedEvalInviteCode = @($env:INVITE_CODES.Split(",") | ForEach-Object { $_.Trim() } | Where-Object { $_ })[0]
+}
 $runStarted = Get-Date
 $runId = $runStarted.ToString("yyyyMMddHHmmss")
 $providerList = Normalize-Providers -InputProviders $Providers -AddGlm ([bool]$IncludeGlm)

@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class ToolRegistryTest {
@@ -44,6 +45,17 @@ class ToolRegistryTest {
         assertThatThrownBy(() -> registry.register(new EchoToolExecutor(objectMapper)))
                 .isInstanceOf(DuplicateToolException.class)
                 .hasMessageContaining("echo");
+    }
+
+    @Test
+    void emptyAllowedToolSetExposesNoTools() {
+        ToolRegistry registry = new ToolRegistry().register(new EchoToolExecutor(objectMapper));
+
+        assertThat(registry.listToolsForModel(Set.of())).isEmpty();
+        assertThatThrownBy(() -> registry.execute(
+                new ToolCall("call-1", "echo", objectMapper.createObjectNode()),
+                Set.of()
+        )).isInstanceOf(ToolNotFoundException.class);
     }
 
     @Test

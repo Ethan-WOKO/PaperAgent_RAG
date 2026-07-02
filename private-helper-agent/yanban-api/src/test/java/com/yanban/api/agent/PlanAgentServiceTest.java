@@ -136,7 +136,7 @@ class PlanAgentServiceTest {
     }
 
     @Test
-    void executePlanTreatsPersistedEmptyAllowedToolsAsNoRuntimeTools() {
+    void executePlanTreatsPersistedEmptyAllowedToolsAsUnrestrictedRuntimeTools() {
         AgentPlanStep step = newStep("step_1", 1, List.of());
         when(steps.findByPlanIdOrderBySortOrderAsc(PLAN_ID)).thenReturn(List.of(step));
         when(harnessEngine.run(any(HarnessRequest.class)))
@@ -147,7 +147,7 @@ class PlanAgentServiceTest {
 
         ArgumentCaptor<HarnessRequest> requestCaptor = ArgumentCaptor.forClass(HarnessRequest.class);
         verify(harnessEngine).run(requestCaptor.capture());
-        assertThat(requestCaptor.getValue().allowedToolNames()).isEmpty();
+        assertThat(requestCaptor.getValue().allowedToolNames()).isNull();
     }
 
     @Test

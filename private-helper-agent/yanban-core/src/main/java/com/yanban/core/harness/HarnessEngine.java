@@ -93,7 +93,7 @@ public class HarnessEngine {
         if (request.skillPrompt() != null && !request.skillPrompt().isBlank()) {
             messages.add(ChatMessage.system(request.skillPrompt()));
         }
-        if (!request.ragDisabled() && knowledgeContextProvider != null) {
+        if (!request.ragDisabled() && knowledgeContextProvider != null && isToolAllowed("search_knowledge", allowedTools)) {
             List<KnowledgeSnippet> snippets = knowledgeContextProvider.searchContext(
                     request.userMessage(),
                     request.userId(),
@@ -111,6 +111,7 @@ public class HarnessEngine {
         if (requiresCurrentWebEvidence(request.userMessage(), allowedTools)) {
             messages.add(ChatMessage.system(currentWebEvidenceInstruction()));
             messages.add(ChatMessage.system(buildCurrentWebEvidenceContext(preloadCurrentWebEvidence(request, allowedTools))));
+            allowedTools = withoutAllowedTool(allowedTools, "search_web");
         }
         messages.add(ChatMessage.user(request.userMessage()));
 
@@ -128,13 +129,14 @@ public class HarnessEngine {
                 return HarnessResult.failure(error, messages, steps);
             }
 
+            List<ToolSpec> visibleTools = toolRegistry.listToolsForModel(allowedTools);
             ChatRequest chatRequest = new ChatRequest(
                     request.provider(),
                     request.model(),
                     List.copyOf(messages),
                     request.temperature(),
                     request.maxTokens(),
-                    toolRegistry.listToolsForModel(allowedTools),
+                    visibleTools.isEmpty() ? null : visibleTools,
                     request.apiKey(),
                     request.apiUrl(),
                     null,
@@ -142,7 +144,7 @@ public class HarnessEngine {
                     request.traceId()
             );
             ChatResponse response = callModel(request, chatRequest, "agent_step", tokenConsumer);
-            ChatMessage assistantMessage = response == null ? null : response.message();
+            ChatMessage assistantMessage = suppressToolCallPreamble(response == null ? null : response.message());
             messages.add(assistantMessage);
 
             if (chatRequest.tools() != null && !chatRequest.tools().isEmpty()) {
@@ -175,10 +177,12 @@ public class HarnessEngine {
                 );
             }
 
-            for (com.yanban.core.model.ToolCall modelToolCall : modelToolCalls) {
+            for (int toolCallIndex = 0; toolCallIndex < modelToolCalls.size(); toolCallIndex++) {
+                com.yanban.core.model.ToolCall modelToolCall = modelToolCalls.get(toolCallIndex);
                 if (deadlineExceeded(request.deadlineAt())) {
                     String error = "Harness deadline exceeded before tool execution";
                     log.warn("{} traceId={} provider={}", error, request.traceId(), request.provider());
+                    appendSkippedToolMessages(messages, modelToolCalls, toolCallIndex, error);
                     if (sawSuccessfulToolResult) {
                         return synthesizeFinalAnswerAfterToolBudget(request, messages, steps, error, tokenConsumer);
                     }
@@ -187,6 +191,7 @@ public class HarnessEngine {
                 if (toolCalls >= maxToolCalls(request)) {
                     String error = "Tool-call budget exceeded: maxToolCalls=" + maxToolCalls(request);
                     log.warn("{} traceId={} provider={}", error, request.traceId(), request.provider());
+                    appendSkippedToolMessages(messages, modelToolCalls, toolCallIndex, error);
                     if (sawSuccessfulToolResult) {
                         return synthesizeFinalAnswerAfterToolBudget(request, messages, steps + 1, error, tokenConsumer);
                     }
@@ -198,6 +203,7 @@ public class HarnessEngine {
                 if (duplicateCount >= maxDuplicateToolCalls(request)) {
                     String error = "Duplicate tool call blocked: " + abbreviate(signature);
                     log.warn("{} traceId={} provider={}", error, request.traceId(), request.provider());
+                    appendSkippedToolMessages(messages, modelToolCalls, toolCallIndex, error);
                     if (sawSuccessfulToolResult) {
                         return synthesizeFinalAnswerAfterToolBudget(request, messages, steps + 1, error, tokenConsumer);
                     }
@@ -239,9 +245,10 @@ public class HarnessEngine {
                                    Consumer<String> tokenConsumer) {
         long startNanos = System.nanoTime();
         try {
+            boolean streamTokensImmediately = chatRequest.tools() == null || chatRequest.tools().isEmpty();
             ChatResponse response = tokenConsumer == null
                     ? modelProvider.chat(chatRequest)
-                    : streamModel(chatRequest, tokenConsumer);
+                    : streamModel(chatRequest, tokenConsumer, streamTokensImmediately);
             long durationMs = (System.nanoTime() - startNanos) / 1_000_000;
             ChatResponse.Usage usage = response == null ? null : response.usage();
             log.info("Harness model phase={} provider={} model={} durationMs={} finishReason={} promptTokens={} completionTokens={} totalTokens={} traceId={}",
@@ -268,7 +275,9 @@ public class HarnessEngine {
         }
     }
 
-    private ChatResponse streamModel(ChatRequest chatRequest, Consumer<String> tokenConsumer) {
+    private ChatResponse streamModel(ChatRequest chatRequest,
+                                     Consumer<String> tokenConsumer,
+                                     boolean streamTokensImmediately) {
         StringBuilder content = new StringBuilder();
         Map<Integer, StreamingToolCallBuilder> toolCallBuilders = new LinkedHashMap<>();
         String[] finishReason = new String[1];
@@ -279,7 +288,9 @@ public class HarnessEngine {
                     }
                     if (chunk.content() != null && !chunk.content().isEmpty()) {
                         content.append(chunk.content());
-                        tokenConsumer.accept(chunk.content());
+                        if (streamTokensImmediately) {
+                            tokenConsumer.accept(chunk.content());
+                        }
                     }
                     for (ChatChunk.ToolCallDelta delta : chunk.toolCallDeltas()) {
                         toolCallBuilders
@@ -296,16 +307,59 @@ public class HarnessEngine {
                 .map(StreamingToolCallBuilder::build)
                 .filter(java.util.Objects::nonNull)
                 .toList();
+        String assistantContent = toolCalls.isEmpty() && content.length() > 0 ? content.toString() : null;
+        if (!streamTokensImmediately && toolCalls.isEmpty() && assistantContent != null) {
+            tokenConsumer.accept(assistantContent);
+        }
         return new ChatResponse(
                 new ChatMessage(
                         "assistant",
-                        content.length() == 0 ? null : content.toString(),
+                        assistantContent,
                         toolCalls.isEmpty() ? null : toolCalls,
                         null
                 ),
                 finishReason[0],
                 null
         );
+    }
+
+    private ChatMessage suppressToolCallPreamble(ChatMessage message) {
+        if (message == null || message.toolCalls() == null || message.toolCalls().isEmpty()) {
+            return message;
+        }
+        return new ChatMessage(message.role(), null, message.toolCalls(), message.toolCallId());
+    }
+
+    private void appendSkippedToolMessages(List<ChatMessage> messages,
+                                           List<ToolCall> toolCalls,
+                                           int startIndex,
+                                           String errorMessage) {
+        if (toolCalls == null || toolCalls.isEmpty()) {
+            return;
+        }
+        for (int i = Math.max(0, startIndex); i < toolCalls.size(); i++) {
+            ToolCall toolCall = toolCalls.get(i);
+            ToolResult result = ToolResult.failure(
+                    safeToolCallId(toolCall, i),
+                    safeToolName(toolCall),
+                    errorMessage
+            );
+            messages.add(ChatMessage.tool(result.toolCallId(), toToolMessageContent(result)));
+        }
+    }
+
+    private String safeToolCallId(ToolCall toolCall, int index) {
+        if (toolCall != null && StringUtils.hasText(toolCall.id())) {
+            return toolCall.id();
+        }
+        return "tool_call_" + index;
+    }
+
+    private String safeToolName(ToolCall toolCall) {
+        if (toolCall != null && toolCall.function() != null && StringUtils.hasText(toolCall.function().name())) {
+            return toolCall.function().name();
+        }
+        return "unknown_tool";
     }
 
     private int maxToolCalls(HarnessRequest request) {
@@ -434,9 +488,12 @@ public class HarnessEngine {
 
     private Set<String> resolveAllowedTools(HarnessRequest request) {
         Set<String> allowed = request.allowedToolNames() == null
-                ? new LinkedHashSet<>(toolRegistry.listToolNames())
+                ? null
                 : new LinkedHashSet<>(request.allowedToolNames());
         if (request.ragDisabled()) {
+            if (allowed == null) {
+                allowed = new LinkedHashSet<>(toolRegistry.listToolNames());
+            }
             allowed.remove("search_knowledge");
         }
         return allowed;
@@ -451,10 +508,18 @@ public class HarnessEngine {
     }
 
     private boolean isToolAllowed(String toolName, Set<String> allowedTools) {
-        if (allowedTools == null || allowedTools.isEmpty()) {
+        if (allowedTools == null) {
             return toolRegistry.find(toolName).isPresent();
         }
         return allowedTools.contains(toolName);
+    }
+
+    private Set<String> withoutAllowedTool(Set<String> allowedTools, String toolName) {
+        Set<String> updated = allowedTools == null
+                ? new LinkedHashSet<>(toolRegistry.listToolNames())
+                : new LinkedHashSet<>(allowedTools);
+        updated.remove(toolName);
+        return updated;
     }
 
     private ToolResult preloadCurrentWebEvidence(HarnessRequest request, Set<String> allowedTools) {

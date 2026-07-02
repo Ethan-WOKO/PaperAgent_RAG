@@ -35,7 +35,7 @@ public class ToolRegistry {
     }
 
     public ToolResult execute(ToolCall call, Set<String> allowedToolNames) {
-        if (allowedToolNames != null && !allowedToolNames.isEmpty() && !allowedToolNames.contains(call.name())) {
+        if (allowedToolNames != null && !allowedToolNames.contains(call.name())) {
             throw new ToolNotFoundException(call.name());
         }
         return execute(call);
@@ -59,7 +59,7 @@ public class ToolRegistry {
         List<ToolSpec> tools = new ArrayList<>();
         for (ToolExecutor executor : executors.values()) {
             String name = executor.definition().name();
-            if (allowedToolNames == null || allowedToolNames.isEmpty() || allowedToolNames.contains(name)) {
+            if (allowedToolNames == null || allowedToolNames.contains(name)) {
                 tools.add(executor.definition().toModelToolSpec());
             }
         }

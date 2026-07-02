@@ -43,6 +43,7 @@ public class AgentService {
     private final UserSettingsService userSettingsService;
     private final ConversationIntentRouterService conversationIntentRouterService;
     private final SkillsService skillsService;
+    private final AgentToolPolicyEngine toolPolicyEngine;
     private final ChatModelProvider titleModelProvider;
 
     public AgentService(AgentSessionRepository sessions,
@@ -52,6 +53,7 @@ public class AgentService {
                         UserSettingsService userSettingsService,
                         ConversationIntentRouterService conversationIntentRouterService,
                         SkillsService skillsService,
+                        AgentToolPolicyEngine toolPolicyEngine,
                         @Qualifier("chatModelProvider") ChatModelProvider titleModelProvider) {
         this.sessions = sessions;
         this.messages = messages;
@@ -60,6 +62,7 @@ public class AgentService {
         this.userSettingsService = userSettingsService;
         this.conversationIntentRouterService = conversationIntentRouterService;
         this.skillsService = skillsService;
+        this.toolPolicyEngine = toolPolicyEngine;
         this.titleModelProvider = titleModelProvider;
     }
 
@@ -195,6 +198,17 @@ public class AgentService {
         ResolvedSkill resolvedSkill = request.skillId() == null || request.skillId().isBlank()
                 ? null
                 : skillsService.resolveEnabledSkill(userId, request.skillId());
+        AgentToolPolicyEngine.Decision toolPolicy = toolPolicyEngine.decide(
+                request.content(),
+                ragDisabled,
+                resolvedSkill == null ? null : resolvedSkill.allowedTools()
+        );
+        log.info("Agent tool policy sessionId={} provider={} model={} allowedTools={} reason={}",
+                session.getId(),
+                endpoint.providerKey(),
+                endpoint.modelName(),
+                toolPolicy.allowedTools(),
+                toolPolicy.reason());
         List<ChatMessage> effectiveHistory = withRuntimeIdentityGuard(history, endpoint);
         HarnessResult result = harnessEngine.run(new HarnessRequest(
                 effectiveHistory,
@@ -209,7 +223,11 @@ public class AgentService {
                 endpoint.apiKey(),
                 endpoint.apiUrl(),
                 resolvedSkill == null ? null : resolvedSkill.prompt(),
-                resolvedSkill == null ? null : List.copyOf(resolvedSkill.allowedTools())
+                toolPolicy.allowedTools(),
+                toolPolicy.maxToolCalls(),
+                toolPolicy.maxDuplicateToolCalls(),
+                null,
+                null
         ), tokenConsumer);
 
         List<ChatMessage> newChatMessages = result.messages().subList(effectiveHistory.size(), result.messages().size());

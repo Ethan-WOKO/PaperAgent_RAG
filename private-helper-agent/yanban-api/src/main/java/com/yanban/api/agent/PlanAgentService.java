@@ -984,7 +984,7 @@ public class PlanAgentService {
     private List<String> resolveRuntimeAllowedTools(AgentPlanStep step, ResolvedSkill skill) {
         List<String> stepAllowed = readStringList(step.getAllowedToolsJson());
         if (StringUtils.hasText(step.getAllowedToolsJson())) {
-            return stepAllowed;
+            return stepAllowed.isEmpty() ? null : stepAllowed;
         }
         if (skill != null && skill.allowedTools() != null && !skill.allowedTools().isEmpty()) {
             return List.copyOf(skill.allowedTools());
