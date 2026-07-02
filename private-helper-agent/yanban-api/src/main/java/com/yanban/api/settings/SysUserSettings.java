@@ -32,6 +32,12 @@ public class SysUserSettings {
     @Column(name = "glm_model", nullable = false, length = 128)
     private String glmModel;
 
+    @Column(name = "deepseek_models")
+    private String deepseekModelsText;
+
+    @Column(name = "glm_models")
+    private String glmModelsText;
+
     @Column(name = "github_pat_encrypted")
     private String githubPatEncrypted;
 
@@ -84,6 +90,8 @@ public class SysUserSettings {
     public String getGlmApiKeyEncrypted() { return glmApiKeyEncrypted; }
     public String getDeepseekModel() { return deepseekModel; }
     public String getGlmModel() { return glmModel; }
+    public String getDeepseekModelsText() { return deepseekModelsText; }
+    public String getGlmModelsText() { return glmModelsText; }
     public String getGithubPatEncrypted() { return githubPatEncrypted; }
     public String getFilesystemRootsText() { return filesystemRootsText; }
     public String getDisabledSkillsJson() { return disabledSkillsJson; }
@@ -95,7 +103,8 @@ public class SysUserSettings {
 
     public void update(String defaultProvider, String deepseekApiKeyEncrypted, String glmApiKeyEncrypted,
                        String deepseekModel, String glmModel, String githubPatEncrypted, String filesystemRootsText,
-                       String disabledSkillsJson, BigDecimal deepseekTemperature, Integer maxSteps, Boolean ragDefaultEnabled) {
+                       String disabledSkillsJson, BigDecimal deepseekTemperature, Integer maxSteps, Boolean ragDefaultEnabled,
+                       String deepseekModelsText, String glmModelsText) {
         this.defaultProvider = defaultProvider;
         this.deepseekApiKeyEncrypted = deepseekApiKeyEncrypted;
         this.glmApiKeyEncrypted = glmApiKeyEncrypted;
@@ -107,5 +116,7 @@ public class SysUserSettings {
         this.deepseekTemperature = deepseekTemperature;
         this.maxSteps = maxSteps;
         this.ragDefaultEnabled = ragDefaultEnabled;
+        this.deepseekModelsText = deepseekModelsText;
+        this.glmModelsText = glmModelsText;
     }
 }

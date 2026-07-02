@@ -38,6 +38,7 @@ Thumbs.db
 # Test / coverage
 coverage/
 .jacoco/
+docs/evaluation/runs/
 
 # Local MCP workspace
 workspace/

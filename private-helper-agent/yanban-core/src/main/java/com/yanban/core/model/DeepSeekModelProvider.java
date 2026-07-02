@@ -46,6 +46,7 @@ public class DeepSeekModelProvider implements ChatModelProvider {
             DeepSeekChatResponse response = webClient.post()
                     .uri(properties.getApiUrl())
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + resolveApiKey(request.apiKey()))
+                    .headers(headers -> applyTraceHeader(headers, request.traceId()))
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
                     .bodyValue(payload)
@@ -73,6 +74,7 @@ public class DeepSeekModelProvider implements ChatModelProvider {
         return webClient.post()
                 .uri(properties.getApiUrl())
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + resolveApiKey(request.apiKey()))
+                .headers(headers -> applyTraceHeader(headers, request.traceId()))
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.TEXT_EVENT_STREAM)
                 .bodyValue(payload)
@@ -92,6 +94,12 @@ public class DeepSeekModelProvider implements ChatModelProvider {
         }
         if (!StringUtils.hasText(resolveApiKey(apiKeyOverride))) {
             throw new ModelProviderException("DeepSeek apiKey is not configured");
+        }
+    }
+
+    private void applyTraceHeader(HttpHeaders headers, String traceId) {
+        if (StringUtils.hasText(traceId)) {
+            headers.set("X-Trace-Id", traceId);
         }
     }
 

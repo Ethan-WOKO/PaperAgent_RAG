@@ -3,6 +3,7 @@
 一个面向科研学习场景的 AI 研助平台，包含：
 
 - 多轮对话 Agent
+- Plan-and-Execute 强规划 Agent（计划生成、DAG 步骤持久化、逐步执行）
 - 知识库上传 / 检索 / RAG
 - 论文修改工作流
 - GLM / DeepSeek 双 Provider
@@ -32,8 +33,10 @@ paper-agent/
 
 - JWT 注册 / 登录 / 刷新
 - Agent 会话、消息、工具调用持久化
+- Plan Agent 计划 / 步骤 / 事件持久化与计划模式 API
 - DeepSeek / GLM Provider 路由
 - WebSocket 流式聊天
+- 计划模式：Planner 生成 JSON DAG，Step Executor 复用 Harness 与工具体系执行
 - 默认 RAG 与“本次禁用知识库”开关
 - 知识库：
   - simple upload
@@ -293,6 +296,7 @@ mvn test -Dgroups=manual
 - 环境说明：`docs/SETUP.md`
 - API 冒烟：`docs/API-smoke.md`
 - WebSocket 协议：`docs/WEBSOCKET.md`
+- v1 评测与上线门禁：`docs/evaluation/README.md`
 
 ## 13. 开源卫生
 

@@ -15,6 +15,8 @@ public record UserSettingsRequest(
         @Size(max = 255) String githubPat,
         @Size(max = 128) String deepseekModel,
         @Size(max = 128) String glmModel,
+        List<@Size(max = 128) String> deepseekModels,
+        List<@Size(max = 128) String> glmModels,
         @DecimalMin("0.00") @DecimalMax("2.00") BigDecimal deepseekTemperature,
         @Min(1) @Max(100) Integer maxSteps,
         Boolean ragDefaultEnabled,

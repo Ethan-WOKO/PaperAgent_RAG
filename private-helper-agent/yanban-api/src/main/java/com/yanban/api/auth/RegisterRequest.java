@@ -12,6 +12,8 @@ public record RegisterRequest(
 
         @NotBlank
         @Size(min = 8, max = 128)
-        String password
+        String password,
+
+        String inviteCode
 ) {
 }

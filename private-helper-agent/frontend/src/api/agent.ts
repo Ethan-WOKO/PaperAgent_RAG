@@ -50,3 +50,85 @@ export function deleteSession(sessionId: number) {
 export function listMessages(sessionId: number) {
   return http.get<AgentMessageResponse[]>(`/agent/sessions/${sessionId}/messages`);
 }
+
+export interface AgentPlanStepResponse {
+  id: number;
+  stepKey: string;
+  sortOrder: number;
+  title: string | null;
+  description: string;
+  type: string;
+  dependencies: string[];
+  allowedTools: string[];
+  successCriteria: string | null;
+  status: string;
+  attemptCount: number;
+  result: string | null;
+  errorMessage: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface AgentPlanResponse {
+  id: number;
+  sessionId: number;
+  goal: string;
+  summary: string | null;
+  status: string;
+  ragDisabled: boolean;
+  skillId: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  steps: AgentPlanStepResponse[];
+}
+
+export interface AgentPlanEventResponse {
+  id: number;
+  planId: number;
+  stepId: number | null;
+  eventType: string;
+  payloadJson: string | null;
+  createdAt: string;
+}
+
+export interface CreateAgentPlanPayload {
+  content: string;
+  ragDisabled?: boolean;
+  skillId?: string | null;
+  autoExecute?: boolean;
+}
+
+export function createPlan(sessionId: number, payload: CreateAgentPlanPayload) {
+  return http.post<AgentPlanResponse>(`/agent/sessions/${sessionId}/plans`, payload);
+}
+
+export function listPlans(sessionId: number) {
+  return http.get<AgentPlanResponse[]>(`/agent/sessions/${sessionId}/plans`);
+}
+
+export function getPlan(planId: number) {
+  return http.get<AgentPlanResponse>(`/agent/plans/${planId}`);
+}
+
+export function executePlan(planId: number) {
+  return http.post<AgentPlanResponse>(`/agent/plans/${planId}/execute`, {});
+}
+
+export function executePlanAsync(planId: number) {
+  return http.post<AgentPlanResponse>(`/agent/plans/${planId}/execute-async`, {});
+}
+
+export function retryPlan(planId: number) {
+  return http.post<AgentPlanResponse>(`/agent/plans/${planId}/retry`, {});
+}
+
+export function cancelPlan(planId: number) {
+  return http.post<AgentPlanResponse>(`/agent/plans/${planId}/cancel`, {});
+}
+
+export function listPlanEvents(planId: number) {
+  return http.get<AgentPlanEventResponse[]>(`/agent/plans/${planId}/events`);
+}

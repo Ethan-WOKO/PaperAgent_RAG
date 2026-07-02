@@ -29,9 +29,11 @@ class DeepSeekModelProviderTest {
     @Test
     void chatParsesAssistantTextAndSendsOpenAiCompatiblePayload() throws Exception {
         AtomicReference<String> authorization = new AtomicReference<>();
+        AtomicReference<String> traceId = new AtomicReference<>();
         AtomicReference<String> requestBody = new AtomicReference<>();
         startServer(exchange -> {
             authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
+            traceId.set(exchange.getRequestHeaders().getFirst("X-Trace-Id"));
             requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             byte[] bytes = """
                     {
@@ -64,13 +66,17 @@ class DeepSeekModelProviderTest {
                 0.2,
                 128,
                 null,
-                null
+                null,
+                null,
+                null,
+                "trace-deepseek-1"
         ));
 
         assertThat(response.assistantText()).isEqualTo("你好，我是研伴。");
         assertThat(response.finishReason()).isEqualTo("stop");
         assertThat(response.usage().totalTokens()).isEqualTo(12);
         assertThat(authorization.get()).isEqualTo("Bearer test-key");
+        assertThat(traceId.get()).isEqualTo("trace-deepseek-1");
         assertThat(requestBody.get()).contains("\"model\":\"deepseek-chat\"");
         assertThat(requestBody.get()).contains("\"role\":\"user\"");
         assertThat(requestBody.get()).contains("\"max_tokens\":128");

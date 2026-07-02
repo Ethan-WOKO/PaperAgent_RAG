@@ -96,9 +96,9 @@ public class AgentService {
         }
         if (StringUtils.hasText(request.modelProvider()) || StringUtils.hasText(request.model())) {
             SysUserSettings settings = userSettingsService.getOrCreate(userId);
-            String provider = normalizeProvider(
-                    StringUtils.hasText(request.modelProvider()) ? request.modelProvider() : session.getModelProviderSnapshot()
-            );
+            String provider = StringUtils.hasText(request.modelProvider())
+                    ? request.modelProvider().trim()
+                    : session.getModelProviderSnapshot();
             String model = StringUtils.hasText(request.model())
                     ? request.model().trim()
                     : resolveDefaultModel(settings, provider);
@@ -136,6 +136,26 @@ public class AgentService {
         List<ChatMessage> history = getHistoryMessages(session.getId());
         boolean shouldAutoGenerateTitle = shouldAutoGenerateTitle(session, history);
 
+        UserSettingsService.ModelEndpoint endpoint = userSettingsService.resolveModelEndpoint(
+                userId, session.getModelProviderSnapshot(), session.getModelSnapshot());
+        if (isRuntimeIdentityQuestion(request.content())) {
+            String assistantContent = buildRuntimeIdentityAnswer(endpoint);
+            List<AgentMessage> saved = new ArrayList<>();
+            saved.add(messages.save(toAgentMessage(session.getId(), userId, ChatMessage.user(request.content()))));
+            saved.add(messages.save(toAgentMessage(session.getId(), userId, ChatMessage.assistant(assistantContent))));
+            messages.flush();
+            session.touch();
+            sessions.saveAndFlush(session);
+            return new SendMessageResponse(
+                    true,
+                    assistantContent,
+                    0,
+                    null,
+                    null,
+                    saved.stream().map(AgentMessageResponse::from).toList()
+            );
+        }
+
         ConversationIntentRouterService.IntentAction intentAction = conversationIntentRouterService.route(request.content());
         if (intentAction != null) {
             List<AgentMessage> saved = new ArrayList<>();
@@ -157,22 +177,24 @@ public class AgentService {
         ResolvedSkill resolvedSkill = request.skillId() == null || request.skillId().isBlank()
                 ? null
                 : skillsService.resolveEnabledSkill(userId, request.skillId());
+        List<ChatMessage> effectiveHistory = withRuntimeIdentityGuard(history, endpoint);
         HarnessResult result = harnessEngine.run(new HarnessRequest(
-                history,
+                effectiveHistory,
                 userId,
                 request.content(),
-                session.getModelProviderSnapshot(),
-                session.getModelSnapshot(),
+                endpoint.providerKey(),
+                endpoint.modelName(),
                 null,
                 null,
                 session.getMaxSteps(),
                 ragDisabled,
-                resolveProviderApiKey(userId, session.getModelProviderSnapshot()),
+                endpoint.apiKey(),
+                endpoint.apiUrl(),
                 resolvedSkill == null ? null : resolvedSkill.prompt(),
                 resolvedSkill == null ? null : List.copyOf(resolvedSkill.allowedTools())
         ));
 
-        List<ChatMessage> newChatMessages = result.messages().subList(history.size(), result.messages().size());
+        List<ChatMessage> newChatMessages = result.messages().subList(effectiveHistory.size(), result.messages().size());
         List<AgentMessage> saved = new ArrayList<>();
         for (ChatMessage chatMessage : newChatMessages) {
             saved.add(messages.save(toAgentMessage(session.getId(), userId, chatMessage)));
@@ -210,7 +232,7 @@ public class AgentService {
 
     private ChatMessage toChatMessage(AgentMessage message) {
         List<ToolCall> toolCalls = parseToolCalls(message.getToolCallsJson());
-        return new ChatMessage(message.getRole(), message.getContent(), toolCalls, null);
+        return new ChatMessage(message.getRole(), message.getContent(), toolCalls, message.getToolCallId());
     }
 
     private AgentMessage toAgentMessage(Long sessionId, Long userId, ChatMessage chatMessage) {
@@ -220,6 +242,7 @@ public class AgentService {
                 chatMessage.role(),
                 chatMessage.content(),
                 serializeToolCalls(chatMessage.toolCalls()),
+                chatMessage.toolCallId(),
                 null
         );
     }
@@ -242,6 +265,46 @@ public class AgentService {
         return history.isEmpty() && isDefaultSessionTitle(session.getTitle());
     }
 
+    private List<ChatMessage> withRuntimeIdentityGuard(List<ChatMessage> history,
+                                                       UserSettingsService.ModelEndpoint endpoint) {
+        List<ChatMessage> guardedHistory = new ArrayList<>(history);
+        guardedHistory.add(ChatMessage.system(buildRuntimeIdentityPrompt(endpoint)));
+        return guardedHistory;
+    }
+
+    private String buildRuntimeIdentityPrompt(UserSettingsService.ModelEndpoint endpoint) {
+        return """
+                Runtime identity guard:
+                - The active backend provider is "%s" and the active backend model is "%s".
+                - You are running inside Yanban/ScholarAI as the user's private research assistant.
+                - Do not claim to be Claude, Anthropic, OpenAI, ChatGPT, Gemini, or any other provider/model unless the runtime provider/model above says so.
+                - If the user asks what model you are, answer with the runtime provider/model above and mention that this is the configured backend for this session.
+                """.formatted(endpoint.providerKey(), endpoint.modelName());
+    }
+
+    private boolean isRuntimeIdentityQuestion(String content) {
+        if (!StringUtils.hasText(content)) {
+            return false;
+        }
+        String normalized = content.trim().toLowerCase();
+        return normalized.contains("你是什么模型")
+                || normalized.contains("你是哪个模型")
+                || normalized.contains("你用的什么模型")
+                || normalized.contains("你是谁")
+                || normalized.contains("你的模型")
+                || normalized.contains("what model are you")
+                || normalized.contains("which model are you")
+                || normalized.contains("who are you");
+    }
+
+    private String buildRuntimeIdentityAnswer(UserSettingsService.ModelEndpoint endpoint) {
+        return "我是当前系统为这个会话配置的后端模型实例：provider="
+                + endpoint.providerKey()
+                + "，model="
+                + endpoint.modelName()
+                + "。我不是 Claude/Anthropic；如果你切换设置里的模型供应商，我这里显示的 provider/model 也会随之变化。";
+    }
+
     private boolean isDefaultSessionTitle(String title) {
         if (!StringUtils.hasText(title)) {
             return true;
@@ -252,9 +315,11 @@ public class AgentService {
 
     private String generateSessionTitle(AgentSession session, Long userId, String firstUserMessage) {
         try {
+            UserSettingsService.ModelEndpoint endpoint = userSettingsService.resolveModelEndpoint(
+                    userId, session.getModelProviderSnapshot(), session.getModelSnapshot());
             ChatResponse response = titleModelProvider.chat(new ChatRequest(
-                    session.getModelProviderSnapshot(),
-                    session.getModelSnapshot(),
+                    endpoint.providerKey(),
+                    endpoint.modelName(),
                     List.of(
                             ChatMessage.system("你是一个会话标题生成器。只输出标题，不要解释，不要标点，不要引号。中文不超过16个字，英文不超过8个词。"),
                             ChatMessage.user("请根据用户第一条消息生成简洁会话标题：\n" + firstUserMessage)
@@ -262,7 +327,11 @@ public class AgentService {
                     0.2,
                     64,
                     null,
-                    resolveProviderApiKey(userId, session.getModelProviderSnapshot())
+                    endpoint.apiKey(),
+                    endpoint.apiUrl(),
+                    null,
+                    null,
+                    null
             ));
             return sanitizeGeneratedTitle(response == null || response.message() == null ? null : response.message().content(), firstUserMessage);
         } catch (Exception ex) {
@@ -296,28 +365,11 @@ public class AgentService {
         return normalized.length() <= 16 ? normalized : normalized.substring(0, 16).trim();
     }
 
-    private String normalizeProvider(String provider) {
-        String resolved = StringUtils.hasText(provider) ? provider.trim().toLowerCase() : UserSettingsService.DEFAULT_PROVIDER;
-        if (!UserSettingsService.DEFAULT_PROVIDER.equals(resolved) && !UserSettingsService.PROVIDER_GLM.equals(resolved)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前仅支持 deepseek 或 glm 作为模型提供方");
-        }
-        return resolved;
-    }
-
     private String resolveDefaultModel(SysUserSettings settings, String provider) {
         return switch (provider == null ? "deepseek" : provider.trim().toLowerCase()) {
             case "glm" -> settings.getGlmModel();
             case "deepseek" -> settings.getDeepseekModel();
             default -> settings.getDeepseekModel();
-        };
-    }
-
-    private String resolveProviderApiKey(Long userId, String provider) {
-        SysUserSettings settings = userSettingsService.getOrCreate(userId);
-        return switch (provider == null ? "deepseek" : provider.trim().toLowerCase()) {
-            case "glm" -> userSettingsService.decryptGlmApiKey(settings);
-            case "deepseek" -> userSettingsService.decryptDeepseekApiKey(settings);
-            default -> null;
         };
     }
 

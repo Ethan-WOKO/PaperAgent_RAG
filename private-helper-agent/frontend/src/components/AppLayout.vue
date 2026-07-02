@@ -1,5 +1,13 @@
 <template>
-  <div class="app-frame">
+  <div
+    class="app-frame"
+    :class="{
+      'app-frame--chat': route.path.startsWith('/chat'),
+      'app-frame--paper': route.path.startsWith('/paper'),
+      'app-frame--settings': route.path.startsWith('/settings'),
+      'app-frame--non-chat': !route.path.startsWith('/chat'),
+    }"
+  >
     <aside class="app-sidebar">
       <div class="app-sidebar__brand" @click="router.push('/chat')">
         <div class="app-sidebar__logo">✦</div>
@@ -68,6 +76,8 @@
       :class="{
         'app-workspace--topbar-collapsed': topbarCollapsed,
         'app-workspace--chat': route.path.startsWith('/chat'),
+        'app-workspace--paper': route.path.startsWith('/paper'),
+        'app-workspace--settings': route.path.startsWith('/settings'),
       }"
     >
       <header class="app-topbar">

@@ -23,7 +23,12 @@ public class KnowledgeSearchContextProvider implements KnowledgeContextProvider 
                         result.filename(),
                         result.chunkIndex(),
                         result.chunkText(),
-                        result.score()
+                        result.score(),
+                        result.citationId(),
+                        result.scoreBand(),
+                        result.source(),
+                        result.rerankScore(),
+                        result.rerankReason()
                 ))
                 .toList();
     }

@@ -22,6 +22,9 @@ public class SysUser {
     @Column(name = "password_hash", nullable = false)
     private String passwordHash;
 
+    @Column(name = "invite_code_id")
+    private Long inviteCodeId;
+
     @Column(name = "created_at", nullable = false, updatable = false, insertable = false)
     private Instant createdAt;
 
@@ -36,6 +39,12 @@ public class SysUser {
         this.passwordHash = passwordHash;
     }
 
+    public SysUser(String username, String passwordHash, Long inviteCodeId) {
+        this.username = username;
+        this.passwordHash = passwordHash;
+        this.inviteCodeId = inviteCodeId;
+    }
+
     public Long getId() {
         return id;
     }
@@ -46,6 +55,10 @@ public class SysUser {
 
     public String getPasswordHash() {
         return passwordHash;
+    }
+
+    public Long getInviteCodeId() {
+        return inviteCodeId;
     }
 
     public Instant getCreatedAt() {

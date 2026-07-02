@@ -79,6 +79,7 @@
           <template #header-extra>
             <div class="chat-toolbar">
               <NCheckbox v-model:checked="ragDisabled">禁用知识库</NCheckbox>
+              <NCheckbox v-model:checked="planMode">计划模式</NCheckbox>
               <NSelect
                 v-model:value="selectedSkillId"
                 style="width: 190px"
@@ -122,9 +123,14 @@
                 <div class="message-bubble">
                   <div class="message-role">{{ message.role === 'user' ? 'You' : 'ScholarAI' }}</div>
                   <div class="message-content">
-                    <template v-for="(segment, index) in getMessageSegments(message.content || (message.role === 'assistant' ? '正在思考...' : '...'))" :key="`${message.localId}-${index}`">
+                    <template v-if="message.role === 'assistant'">
+                      <MarkdownMessage :content="message.content || '正在思考...'" />
+                    </template>
+                    <template v-else>
+                    <template v-for="(segment, index) in getMessageSegments(message.content || '...')" :key="`${message.localId}-${index}`">
                       <pre v-if="segment.type === 'code'" class="message-code-block"><code>{{ segment.content }}</code></pre>
                       <p v-else class="message-text-block">{{ segment.content }}</p>
+                    </template>
                     </template>
                   </div>
                   <NButton
@@ -157,6 +163,7 @@
               <div class="chat-composer__quick-actions">
                 <button type="button" @click="draft = '/literature polarimetric FDA-MIMO self-protection jamming 5篇 bibtex'">Search Papers</button>
                 <button type="button" @click="draft = '帮我润色论文'">Polish Paper</button>
+                <button type="button" @click="planMode = !planMode">{{ planMode ? 'ReAct Mode' : 'Plan Mode' }}</button>
                 <button type="button" @click="showProcessMessages = !showProcessMessages">Tool Trace</button>
               </div>
             </div>
@@ -197,13 +204,22 @@
               <NButton secondary circle size="small" class="chat-panel-collapse" title="Hide Research Agent" @click="setAgentSidebarCollapsed(true)">⟩</NButton>
             </div>
           </div>
-          <div class="agent-progress"><span :style="{ width: sending ? '62%' : '36%' }" /></div>
-          <div class="agent-plan-list">
+          <div class="agent-progress"><span :style="{ width: currentPlan ? `${planProgress}%` : (sending ? '62%' : '36%') }" /></div>
+          <div class="agent-plan-list" v-if="currentPlan">
+            <div
+              v-for="(step, index) in currentPlan.steps"
+              :key="step.id"
+              class="agent-plan-step"
+              :class="planStepClass(step.status)"
+            >
+              <i>{{ index + 1 }}</i><span>{{ step.title || step.description }}</span><small>{{ step.status }}</small>
+            </div>
+          </div>
+          <div class="agent-plan-list" v-else>
             <div class="agent-plan-step agent-plan-step--done"><i>1</i><span>Understand request</span><small>Done</small></div>
-            <div class="agent-plan-step" :class="{ 'agent-plan-step--active': sending }"><i>2</i><span>Search literature</span><small>{{ sending ? 'Running' : 'Ready' }}</small></div>
-            <div class="agent-plan-step"><i>3</i><span>Analyze papers</span><small>Pending</small></div>
+            <div class="agent-plan-step" :class="{ 'agent-plan-step--active': sending }"><i>2</i><span>{{ planMode ? 'Plan & execute' : 'Search literature' }}</span><small>{{ sending ? 'Running' : 'Ready' }}</small></div>
+            <div class="agent-plan-step"><i>3</i><span>Analyze result</span><small>Pending</small></div>
             <div class="agent-plan-step"><i>4</i><span>Draft response</span><small>Pending</small></div>
-            <div class="agent-plan-step"><i>5</i><span>Verify citations</span><small>Pending</small></div>
           </div>
         </section>
 
@@ -249,13 +265,19 @@ import { NButton, NCard, NCheckbox, NDropdown, NEmpty, NInput, NModal, NSelect, 
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import AppLayout from '@/components/AppLayout.vue';
+import MarkdownMessage from '@/components/MarkdownMessage.vue';
 import {
+  createPlan,
   createSession,
   deleteSession as deleteAgentSession,
+  executePlanAsync,
+  getPlan,
   listMessages,
   listSessions,
   updateSession as updateAgentSession,
   type AgentMessageResponse,
+  type AgentPlanResponse,
+  type AgentPlanStepResponse,
   type AgentSessionResponse,
 } from '@/api/agent';
 import { listSkills, type SkillListItemResponse } from '@/api/skills';
@@ -299,7 +321,9 @@ const availableSkills = ref<SkillListItemResponse[]>([]);
 const settings = ref<UserSettingsResponse | null>(null);
 const selectedModelKey = ref('');
 const ragDisabled = ref(false);
+const planMode = ref(false);
 const showProcessMessages = ref(false);
+const currentPlan = ref<AgentPlanResponse | null>(null);
 const currentSocket = ref<WebSocket | null>(null);
 const currentAssistantMessageId = ref<string | null>(null);
 const messagesContainerRef = ref<HTMLElement | null>(null);
@@ -322,12 +346,25 @@ const skillOptions = computed(() => availableSkills.value
   .map((skill) => ({ label: `${skill.name}${skill.source === 'builtin' ? '（内置）' : ''}`, value: skill.id })));
 
 const modelOptions = computed(() => {
-  const deepseekModel = settings.value?.deepseekModel || 'deepseek-chat';
-  const glmModel = settings.value?.glmModel || 'glm-4.5-air';
-  const options = [
-    { label: `DeepSeek · ${deepseekModel}`, value: toModelKey('deepseek', deepseekModel) },
-    { label: `GLM · ${glmModel}`, value: toModelKey('glm', glmModel) },
-  ];
+  const options: { label: string; value: string }[] = [];
+  const deepseekModels = settings.value?.deepseekModels?.length
+    ? settings.value.deepseekModels
+    : ['deepseek-chat'];
+  for (const m of deepseekModels) {
+    options.push({ label: `DeepSeek · ${m}`, value: toModelKey('deepseek', m) });
+  }
+  const glmModels = settings.value?.glmModels?.length
+    ? settings.value.glmModels
+    : ['glm-4.5-air'];
+  for (const m of glmModels) {
+    options.push({ label: `GLM · ${m}`, value: toModelKey('glm', m) });
+  }
+  const customModels = settings.value?.customModels || [];
+  for (const cm of customModels) {
+    if (!cm.builtin) {
+      options.push({ label: `${cm.label} · ${cm.modelName}`, value: toModelKey(cm.providerKey, cm.modelName) });
+    }
+  }
   if (selectedModelKey.value && !options.some((option) => option.value === selectedModelKey.value)) {
     const selected = parseModelKey(selectedModelKey.value);
     options.push({ label: `${formatProviderName(selected.provider)} · ${selected.model}`, value: selectedModelKey.value });
@@ -338,6 +375,15 @@ const modelOptions = computed(() => {
 const activeSessionTitle = computed(() => {
   const active = sessions.value.find((item) => item.id === selectedSessionId.value);
   return active?.title || '研伴对话';
+});
+
+const planProgress = computed(() => {
+  const steps = currentPlan.value?.steps || [];
+  if (steps.length === 0) {
+    return sending.value ? 62 : 36;
+  }
+  const finished = steps.filter((step) => ['COMPLETED', 'DEGRADED', 'SUPERSEDED', 'FAILED', 'SKIPPED'].includes(step.status)).length;
+  return Math.max(8, Math.round((finished / steps.length) * 100));
 });
 
 const filteredMessages = computed(() => {
@@ -391,6 +437,7 @@ async function loadSessions(selectLatest = true) {
 
 async function selectSession(sessionId: number) {
   selectedSessionId.value = sessionId;
+  currentPlan.value = null;
   const session = sessions.value.find((item) => item.id === sessionId);
   ragDisabled.value = Boolean(session?.ragDisabled);
   if (session?.modelProvider && session?.model) {
@@ -471,12 +518,115 @@ async function handleSend() {
     });
     await scrollMessagesToBottom();
 
-    await sendWsMessage(sessionId, content, ragDisabled.value, selectedSkillId.value);
+    if (planMode.value && !isPlanArtifactRequest(content)) {
+      await sendPlanMessage(sessionId, content, ragDisabled.value, selectedSkillId.value);
+    } else {
+      await sendWsMessage(sessionId, content, ragDisabled.value, selectedSkillId.value);
+    }
   } catch (error: any) {
     removePendingAssistant();
     ui.message.error(error.response?.data?.message || error.message || '发送失败');
     sending.value = false;
   }
+}
+
+function isPlanArtifactRequest(content: string) {
+  const text = content.trim().toLowerCase();
+  if (!text) {
+    return false;
+  }
+  const asksForPlanArtifact = /(制定|设计|生成|输出|给我|帮我).{0,16}(研究计划|学习计划|学习路线|路线图|roadmap|plan)/i.test(text)
+    || /(研究计划|学习计划|学习路线|路线图|roadmap).{0,16}(制定|设计|生成|输出)/i.test(text);
+  const asksToExecute = /(执行|开始执行|直接执行|搜索|检索|查找|调研|收集|爬取|调用|运行|分析文献|找.{0,8}论文|search|execute|run)/i.test(text);
+  return asksForPlanArtifact && !asksToExecute;
+}
+
+async function sendPlanMessage(sessionId: number, content: string, disableRag: boolean, skillId: string | null) {
+  currentSocket.value?.close();
+  const { data: createdPlan } = await createPlan(sessionId, {
+    content,
+    ragDisabled: disableRag,
+    skillId,
+    autoExecute: false,
+  });
+  currentPlan.value = createdPlan;
+  await setAssistantContent(buildPlanAssistantContent(createdPlan));
+
+  let refreshing = false;
+  const refreshPlan = async () => {
+    if (refreshing) {
+      return currentPlan.value;
+    }
+    refreshing = true;
+    try {
+      const { data } = await getPlan(createdPlan.id);
+      currentPlan.value = data;
+      await setAssistantContent(buildPlanAssistantContent(data));
+      return data;
+    } catch {
+      return currentPlan.value;
+    } finally {
+      refreshing = false;
+    }
+  };
+
+  try {
+    const { data: queuedPlan } = await executePlanAsync(createdPlan.id);
+    currentPlan.value = queuedPlan;
+    await setAssistantContent(buildPlanAssistantContent(queuedPlan));
+
+    await new Promise<void>((resolve) => {
+      let pollTimer: number | undefined;
+      let timeoutTimer: number | undefined;
+      timeoutTimer = window.setTimeout(() => {
+        if (pollTimer !== undefined) {
+          window.clearInterval(pollTimer);
+        }
+        void refreshPlan().finally(resolve);
+      }, 300000);
+      pollTimer = window.setInterval(() => {
+        void refreshPlan().then((plan) => {
+          if (plan && isTerminalPlanStatus(plan.status)) {
+            if (pollTimer !== undefined) {
+              window.clearInterval(pollTimer);
+            }
+            if (timeoutTimer !== undefined) {
+              window.clearTimeout(timeoutTimer);
+            }
+            resolve();
+          }
+        });
+      }, 1500);
+      void refreshPlan().then((plan) => {
+        if (plan && isTerminalPlanStatus(plan.status)) {
+          if (pollTimer !== undefined) {
+            window.clearInterval(pollTimer);
+          }
+          if (timeoutTimer !== undefined) {
+            window.clearTimeout(timeoutTimer);
+          }
+          resolve();
+        }
+      });
+    });
+
+    const finalPlan = currentPlan.value || queuedPlan;
+    if (finalPlan.status === 'FAILED' || finalPlan.status === 'CANCELLED') {
+      await appendAssistantChunk(`\n\nPlan ended with status ${finalPlan.status}: ${finalPlan.errorMessage || 'No error message.'}`);
+    }
+    await afterSendFinished(sessionId);
+  } catch (error: any) {
+    const message = error.response?.data?.message || error.message || 'Plan execution failed';
+    await refreshPlan();
+    await appendAssistantChunk(`\n\nPlan execution failed: ${message}`);
+    ui.message.error(message);
+    sending.value = false;
+    currentAssistantMessageId.value = null;
+  }
+}
+
+function isTerminalPlanStatus(status: string) {
+  return status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
 }
 
 async function sendWsMessage(sessionId: number, content: string, disableRag: boolean, skillId: string | null) {
@@ -557,6 +707,14 @@ async function appendAssistantChunk(chunk: string) {
   const target = messages.value.find((item) => item.localId === currentAssistantMessageId.value);
   if (target) {
     target.content += chunk;
+    await scrollMessagesToBottom();
+  }
+}
+
+async function setAssistantContent(content: string) {
+  const target = messages.value.find((item) => item.localId === currentAssistantMessageId.value);
+  if (target) {
+    target.content = content;
     await scrollMessagesToBottom();
   }
 }
@@ -725,6 +883,28 @@ async function afterSendFinished(sessionId: number) {
   }
 }
 
+function buildPlanAssistantContent(plan: AgentPlanResponse) {
+  const lines = [
+    `计划执行状态：${plan.status}`,
+    plan.summary ? `摘要：${plan.summary}` : '',
+    '',
+    '步骤：',
+    ...plan.steps.map((step) => `- [${step.status}] ${step.stepKey} ${step.title || step.description}${step.errorMessage ? `：${step.errorMessage}` : ''}`),
+  ].filter(Boolean);
+  if (plan.errorMessage) {
+    lines.push('', `错误：${plan.errorMessage}`);
+  }
+  return lines.join('\n');
+}
+
+function planStepClass(status: AgentPlanStepResponse['status']) {
+  return {
+    'agent-plan-step--done': status === 'COMPLETED' || status === 'DEGRADED' || status === 'SUPERSEDED',
+    'agent-plan-step--active': status === 'RUNNING' || status === 'REPAIRING',
+    'agent-plan-step--failed': status === 'FAILED' || status === 'SKIPPED',
+  };
+}
+
 function toViewMessage(message: AgentMessageResponse): ChatMessageView {
   return {
     localId: `server-${message.id}`,
@@ -814,7 +994,10 @@ function defaultModelKeyFromSettings(currentSettings: UserSettingsResponse | nul
 }
 
 function formatProviderName(provider: string) {
-  return provider.toLowerCase() === 'glm' ? 'GLM' : 'DeepSeek';
+  const lower = (provider || '').toLowerCase();
+  if (lower === 'glm') return 'GLM';
+  if (lower === 'deepseek') return 'DeepSeek';
+  return provider;
 }
 
 function formatSessionUpdatedAt(value: string) {

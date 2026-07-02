@@ -5,8 +5,11 @@ import com.yanban.knowledge.domain.KbChunkRepository;
 import com.yanban.knowledge.domain.KbDocument;
 import com.yanban.knowledge.domain.KbDocumentRepository;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -16,10 +19,19 @@ public class SimpleKnowledgeSearchService implements KnowledgeSearchService {
 
     private final KbChunkRepository chunks;
     private final KbDocumentRepository documents;
+    private final KnowledgeReranker reranker;
 
     public SimpleKnowledgeSearchService(KbChunkRepository chunks, KbDocumentRepository documents) {
+        this(chunks, documents, new KnowledgeReranker());
+    }
+
+    @Autowired
+    public SimpleKnowledgeSearchService(KbChunkRepository chunks,
+                                        KbDocumentRepository documents,
+                                        KnowledgeReranker reranker) {
         this.chunks = chunks;
         this.documents = documents;
+        this.reranker = reranker;
     }
 
     @Override
@@ -27,9 +39,10 @@ public class SimpleKnowledgeSearchService implements KnowledgeSearchService {
         if (!StringUtils.hasText(query) || topK <= 0) {
             return List.of();
         }
-        List<KbChunk> found = chunks.searchAccessibleChunks(query.trim(), userId, PageRequest.of(0, topK));
+        int candidateLimit = Math.max(topK, Math.min(50, topK * 4));
+        List<String> queryVariants = KnowledgeQueryVariants.expand(query);
+        List<KbChunk> found = searchVariants(queryVariants, userId, candidateLimit);
         List<KnowledgeSearchResult> results = new ArrayList<>();
-        String keyword = query.toLowerCase(Locale.ROOT);
         for (KbChunk chunk : found) {
             KbDocument document = documents.findById(chunk.getDocumentId()).orElse(null);
             if (document == null) {
@@ -40,21 +53,47 @@ public class SimpleKnowledgeSearchService implements KnowledgeSearchService {
                     document.getFilename(),
                     chunk.getChunkIndex(),
                     chunk.getChunkText(),
-                    score(chunk.getChunkText(), keyword),
+                    score(chunk.getChunkText(), queryVariants),
                     Boolean.TRUE.equals(document.getIsPublic())
             ));
         }
-        return results;
+        return reranker.rerank(query, results, topK);
     }
 
-    private double score(String text, String keyword) {
-        String lower = text == null ? "" : text.toLowerCase(Locale.ROOT);
-        int count = 0;
-        int from = 0;
-        while ((from = lower.indexOf(keyword, from)) >= 0) {
-            count++;
-            from += keyword.length();
+    private List<KbChunk> searchVariants(List<String> queryVariants, Long userId, int candidateLimit) {
+        List<KbChunk> found = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (String variant : queryVariants) {
+            List<KbChunk> variantHits = chunks.searchAccessibleChunks(variant, userId, PageRequest.of(0, candidateLimit));
+            if (variantHits == null) {
+                continue;
+            }
+            for (KbChunk chunk : variantHits) {
+                String key = chunk.getId() == null
+                        ? chunk.getDocumentId() + ":" + chunk.getChunkIndex()
+                        : "id:" + chunk.getId();
+                if (seen.add(key)) {
+                    found.add(chunk);
+                }
+            }
         }
-        return Math.max(1.0, count);
+        return found;
+    }
+
+    private double score(String text, List<String> queryVariants) {
+        String lower = text == null ? "" : text.toLowerCase(Locale.ROOT);
+        double best = 1.0d;
+        for (String keyword : queryVariants) {
+            int count = 0;
+            int from = 0;
+            while (StringUtils.hasText(keyword) && (from = lower.indexOf(keyword, from)) >= 0) {
+                count++;
+                from += keyword.length();
+            }
+            if (count > 0) {
+                best = Math.max(best, 1.0d + count);
+            }
+        }
+        return best;
     }
 }

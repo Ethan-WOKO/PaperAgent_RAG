@@ -53,6 +53,24 @@ yanban:
       object-prefix: ${YANBAN_PAPER_OBJECT_PREFIX:paper/originals}
       prefer-minio: ${YANBAN_PAPER_PREFER_MINIO:true}
       local-root: ${YANBAN_PAPER_LOCAL_ROOT:data/paper-storage}
+  agent:
+    web-search:
+      provider: ${WEB_SEARCH_PROVIDER:duckduckgo}
+      endpoint: ${WEB_SEARCH_DUCKDUCKGO_ENDPOINT:https://duckduckgo.com/html/}
+      timeout: ${WEB_SEARCH_TIMEOUT:12s}
+      max-results: ${WEB_SEARCH_MAX_RESULTS:8}
+      cache-ttl: ${WEB_SEARCH_CACHE_TTL:30m}
+      fallback-to-duck-duck-go: ${WEB_SEARCH_FALLBACK_TO_DUCKDUCKGO:true}
+      tavily:
+        endpoint: ${TAVILY_API_URL:https://api.tavily.com/search}
+        api-key: ${TAVILY_API_KEY:}
+        search-depth: ${TAVILY_SEARCH_DEPTH:basic}
+        auto-parameters: ${TAVILY_AUTO_PARAMETERS:false}
+        topic: ${TAVILY_TOPIC:general}
+        include-answer: ${TAVILY_INCLUDE_ANSWER:false}
+        include-raw-content: ${TAVILY_INCLUDE_RAW_CONTENT:false}
+        include-images: ${TAVILY_INCLUDE_IMAGES:false}
+        include-usage: ${TAVILY_INCLUDE_USAGE:true}
   mcp:
     github:
       enabled: ${YANBAN_MCP_GITHUB_ENABLED:false}

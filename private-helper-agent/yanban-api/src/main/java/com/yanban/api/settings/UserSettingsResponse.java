@@ -11,14 +11,22 @@ public record UserSettingsResponse(
         boolean githubPatConfigured,
         String deepseekModel,
         String glmModel,
+        List<String> deepseekModels,
+        List<String> glmModels,
         BigDecimal deepseekTemperature,
         Integer maxSteps,
         Boolean ragDefaultEnabled,
         List<String> filesystemRoots,
         List<String> disabledSkills,
+        List<UserModelResponse> customModels,
         Instant updatedAt
 ) {
-    public static UserSettingsResponse from(SysUserSettings settings, List<String> filesystemRoots, List<String> disabledSkills) {
+    public static UserSettingsResponse from(SysUserSettings settings,
+                                           List<String> filesystemRoots,
+                                           List<String> disabledSkills,
+                                           List<String> deepseekModels,
+                                           List<String> glmModels,
+                                           List<UserModelResponse> customModels) {
         return new UserSettingsResponse(
                 settings.getDefaultProvider(),
                 settings.getDeepseekApiKeyEncrypted() != null && !settings.getDeepseekApiKeyEncrypted().isBlank(),
@@ -26,11 +34,14 @@ public record UserSettingsResponse(
                 settings.getGithubPatEncrypted() != null && !settings.getGithubPatEncrypted().isBlank(),
                 settings.getDeepseekModel(),
                 settings.getGlmModel(),
+                deepseekModels,
+                glmModels,
                 settings.getDeepseekTemperature(),
                 settings.getMaxSteps(),
                 settings.getRagDefaultEnabled(),
                 filesystemRoots,
                 disabledSkills,
+                customModels,
                 settings.getUpdatedAt()
         );
     }

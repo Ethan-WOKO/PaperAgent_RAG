@@ -67,7 +67,9 @@ public class SkillsService {
                 writeJson(List.copyOf(disabledIds)),
                 settings.getDeepseekTemperature(),
                 settings.getMaxSteps(),
-                settings.getRagDefaultEnabled()
+                settings.getRagDefaultEnabled(),
+                settings.getDeepseekModelsText(),
+                settings.getGlmModelsText()
         );
     }
 

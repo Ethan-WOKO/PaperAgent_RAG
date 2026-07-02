@@ -29,13 +29,23 @@ services:
     image: redis:7
     container_name: yanban-redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    command:
+      - sh
+      - -c
+      - |
+        if [ -n "$$REDIS_PASSWORD" ]; then
+          redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"
+        else
+          redis-server --appendonly yes
+        fi
     ports:
       - "6379:6379"
     volumes:
       - yanban_redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "if [ -n \"$$REDIS_PASSWORD\" ]; then redis-cli -a \"$$REDIS_PASSWORD\" ping; else redis-cli ping; fi"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -43,7 +53,10 @@ services:
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.10.4
     container_name: yanban-elasticsearch
+    hostname: yanban-elasticsearch
     restart: unless-stopped
+    extra_hosts:
+      - "yanban-elasticsearch:127.0.0.1"
     environment:
       discovery.type: single-node
       xpack.security.enabled: "false"
@@ -63,7 +76,10 @@ services:
   kafka:
     image: apache/kafka:3.8.1
     container_name: yanban-kafka
+    hostname: yanban-kafka
     restart: unless-stopped
+    extra_hosts:
+      - "yanban-kafka:127.0.0.1"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller

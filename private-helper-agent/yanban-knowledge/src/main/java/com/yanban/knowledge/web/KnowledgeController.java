@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
@@ -68,6 +69,13 @@ public class KnowledgeController {
     @GetMapping("/api/v1/kb/documents")
     public List<KbDocumentListItemResponse> listDocuments(@AuthenticationPrincipal(expression = "id") Long userId) {
         return documentService.listOwnedDocuments(userId);
+    }
+
+    @GetMapping("/api/v1/kb/documents/{documentId}/preview")
+    public KbDocumentPreviewResponse previewDocument(@AuthenticationPrincipal(expression = "id") Long userId,
+                                                     @PathVariable Long documentId,
+                                                     @RequestParam(required = false) Integer maxChars) {
+        return documentService.previewOwnedDocument(userId, documentId, maxChars);
     }
 
     @DeleteMapping("/api/v1/kb/documents/{documentId}")

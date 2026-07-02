@@ -55,9 +55,19 @@ public class SearchKnowledgeToolExecutor implements ToolExecutor {
             item.put("chunkText", result.chunkText());
             item.put("score", result.score());
             item.put("isPublic", result.isPublic());
+            item.put("citationId", result.citationId());
+            item.put("scoreBand", result.scoreBand());
+            item.put("source", result.source());
+            if (result.rerankScore() != null) {
+                item.put("rerankScore", result.rerankScore());
+            }
+            if (result.rerankReason() != null) {
+                item.put("rerankReason", result.rerankReason());
+            }
         }
         ObjectNode output = objectMapper.createObjectNode();
         output.set("items", items);
+        output.put("guidance", "Use citationId/source when citing knowledge base evidence. If scoreBand is low or no items are returned, state that retrieval confidence is limited before falling back.");
         return ToolResult.success(call.id(), definition.name(), output);
     }
 }

@@ -7,11 +7,14 @@ export interface UserSettingsResponse {
   githubPatConfigured: boolean;
   deepseekModel: string;
   glmModel: string;
+  deepseekModels: string[];
+  glmModels: string[];
   deepseekTemperature: number;
   maxSteps: number;
   ragDefaultEnabled: boolean;
   filesystemRoots: string[];
   disabledSkills: string[];
+  customModels: UserModelResponse[];
   updatedAt: string | null;
 }
 
@@ -22,11 +25,33 @@ export interface UserSettingsRequest {
   githubPat?: string;
   deepseekModel: string;
   glmModel: string;
+  deepseekModels?: string[];
+  glmModels?: string[];
   deepseekTemperature: number;
   maxSteps: number;
   ragDefaultEnabled: boolean;
   filesystemRoots: string[];
   disabledSkills: string[];
+}
+
+export interface UserModelResponse {
+  id: number;
+  providerKey: string;
+  label: string;
+  modelName: string;
+  apiUrl: string | null;
+  apiKeyConfigured: boolean;
+  builtin: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UserModelRequest {
+  label: string;
+  apiUrl: string;
+  apiKey?: string;
+  modelName: string;
 }
 
 export function getSettings() {
@@ -35,4 +60,24 @@ export function getSettings() {
 
 export function updateSettings(payload: UserSettingsRequest) {
   return http.put<UserSettingsResponse>('/settings', payload);
+}
+
+export function listModels() {
+  return http.get<UserModelResponse[]>('/models');
+}
+
+export function createModel(payload: UserModelRequest) {
+  return http.post<UserModelResponse>('/models', payload);
+}
+
+export function updateModel(id: number, payload: UserModelRequest) {
+  return http.put<UserModelResponse>(`/models/${id}`, payload);
+}
+
+export function deleteModel(id: number) {
+  return http.delete<void>(`/models/${id}`);
+}
+
+export function testModel(id: number) {
+  return http.post<{ success: boolean; content?: string; error?: string }>(`/models/${id}/test`, {});
 }

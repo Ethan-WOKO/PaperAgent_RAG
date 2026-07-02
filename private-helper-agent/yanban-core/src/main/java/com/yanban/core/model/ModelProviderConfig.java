@@ -1,5 +1,6 @@
 package com.yanban.core.model;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -19,14 +20,21 @@ public class ModelProviderConfig {
     }
 
     @Bean
+    public OpenAiCompatibleModelProvider openAiCompatibleModelProvider(ObjectMapper objectMapper) {
+        return new OpenAiCompatibleModelProvider(objectMapper);
+    }
+
+    @Bean
     public ChatModelProvider chatModelProvider(DeepSeekModelProvider deepSeekModelProvider,
-                                               GlmModelProvider glmModelProvider) {
+                                               GlmModelProvider glmModelProvider,
+                                               OpenAiCompatibleModelProvider openAiCompatibleModelProvider) {
         return new RoutingChatModelProvider(
                 java.util.Map.of(
                         deepSeekModelProvider.providerName(), deepSeekModelProvider,
                         glmModelProvider.providerName(), glmModelProvider
                 ),
-                deepSeekModelProvider.providerName()
+                deepSeekModelProvider.providerName(),
+                openAiCompatibleModelProvider
         );
     }
 }

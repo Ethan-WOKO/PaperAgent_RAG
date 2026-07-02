@@ -31,7 +31,7 @@ export const useAuthStore = defineStore('auth', () => {
     await fetchCurrentUser();
   }
 
-  async function signUp(payload: { username: string; password: string }) {
+  async function signUp(payload: { username: string; password: string; inviteCode?: string }) {
     const { data } = await register(payload);
     persist(data);
     await fetchCurrentUser();

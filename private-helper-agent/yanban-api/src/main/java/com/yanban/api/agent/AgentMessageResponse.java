@@ -10,6 +10,7 @@ public record AgentMessageResponse(
         String role,
         String content,
         String toolCallsJson,
+        String toolCallId,
         Long paperTaskId,
         Instant createdAt
 ) {
@@ -21,6 +22,7 @@ public record AgentMessageResponse(
                 message.getRole(),
                 message.getContent(),
                 message.getToolCallsJson(),
+                message.getToolCallId(),
                 message.getPaperTaskId(),
                 message.getCreatedAt()
         );

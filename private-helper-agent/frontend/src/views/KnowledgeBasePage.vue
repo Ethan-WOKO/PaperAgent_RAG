@@ -1,84 +1,185 @@
 <template>
   <AppLayout>
-    <div class="kb-page workbench-page">
-      <section class="workbench-hero">
+    <div class="kb-page workbench-page scholar-page scholar-page--knowledge">
+      <section class="workbench-hero scholar-page-hero">
         <div>
-          <div class="workbench-kicker">Knowledge base</div>
-          <h1>知识库文档工作台</h1>
-          <p>上传科研资料后由后台异步解析、向量化并进入可检索状态。列表会在处理期间自动轮询。</p>
+          <div class="workbench-kicker">Knowledge Base</div>
+          <h1>Knowledge Base</h1>
+          <p>Manage private research documents, parsing status, retrieval visibility, and previewable text assets.</p>
         </div>
-        <NSpace>
-          <NTag type="success" round>{{ readyCount }} READY</NTag>
-          <NTag :type="hasProcessingDocuments ? 'warning' : 'default'" round>
-            {{ hasProcessingDocuments ? '处理中' : '状态稳定' }}
-          </NTag>
+        <NSpace align="center">
+          <NButton secondary @click="router.push('/knowledge-base/search-debug')">Search Debug</NButton>
+          <NButton :loading="loading" @click="loadDocuments">Sync</NButton>
         </NSpace>
       </section>
 
+      <div class="scholar-metric-strip">
+        <article class="scholar-metric-card">
+          <span>Total documents</span>
+          <strong>{{ documents.length }}</strong>
+        </article>
+        <article class="scholar-metric-card">
+          <span>Ready for RAG</span>
+          <strong>{{ readyCount }}</strong>
+        </article>
+        <article class="scholar-metric-card">
+          <span>Processing</span>
+          <strong>{{ processingCount }}</strong>
+        </article>
+        <article class="scholar-metric-card">
+          <span>Storage used</span>
+          <strong>{{ totalStorageText }}</strong>
+        </article>
+      </div>
+
       <NGrid :cols="24" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
-        <NGridItem span="24 l:7">
-          <NCard class="workbench-card" :bordered="false">
-            <template #header><div class="section-title">上传文档</div></template>
-            <NSpace vertical size="large">
-              <NAlert type="info" title="分片上传">
-                上传成功后文档先进入 PROCESSING，再由后台处理为 READY。
-              </NAlert>
-
-              <div class="kb-upload-box">
-                <input ref="fileInputRef" type="file" class="kb-file-input" @change="handleFileChange" />
-                <div class="upload-dropzone" @click="fileInputRef?.click()">
-                  <strong>{{ selectedFile ? selectedFile.name : '点击选择文件' }}</strong>
-                  <span>{{ selectedFile ? formatFileSize(selectedFile.size) : '支持 pdf / docx / txt / md 等文件' }}</span>
+        <NGridItem span="24 xl:16">
+          <NSpace vertical size="large">
+            <NCard class="workbench-card scholar-card kb-upload-card" :bordered="false">
+              <template #header>
+                <div class="section-title">Upload Documents</div>
+              </template>
+              <NSpace vertical size="large">
+                <div class="kb-upload-box">
+                  <input ref="fileInputRef" type="file" class="kb-file-input" @change="handleFileChange" />
+                  <div class="upload-dropzone scholar-dropzone" @click="fileInputRef?.click()">
+                    <div class="scholar-dropzone__icon">UP</div>
+                    <strong>{{ selectedFile ? selectedFile.name : 'Drag and drop files here' }}</strong>
+                    <span>{{ selectedFile ? formatFileSize(selectedFile.size) : 'PDF, DOCX, TXT, MD up to the backend upload limit.' }}</span>
+                  </div>
                 </div>
-              </div>
 
-              <NCheckbox v-model:checked="isPublic">设为公开文档</NCheckbox>
+                <div class="kb-upload-actions">
+                  <NCheckbox v-model:checked="isPublic">Make this document public in the workspace</NCheckbox>
+                  <NSpace>
+                    <NButton secondary :disabled="uploading || !selectedFile" @click="clearSelectedFile">Clear</NButton>
+                    <NButton type="primary" :loading="uploading" :disabled="!selectedFile" @click="handleUpload">
+                      Upload Files
+                    </NButton>
+                  </NSpace>
+                </div>
 
-              <div v-if="uploading" class="kb-progress-block">
-                <NProgress type="line" :percentage="uploadProgress" :indicator-placement="'inside'" processing />
-                <div class="chat-hint">{{ uploadStatusText }}</div>
-              </div>
-
-              <NSpace>
-                <NButton type="primary" :loading="uploading" :disabled="!selectedFile" @click="handleUpload">开始上传</NButton>
-                <NButton quaternary :disabled="uploading || !selectedFile" @click="clearSelectedFile">清空</NButton>
+                <div v-if="uploading" class="kb-progress-block">
+                  <NProgress type="line" :percentage="uploadProgress" :indicator-placement="'inside'" processing />
+                  <div class="chat-hint">{{ uploadStatusText }}</div>
+                </div>
               </NSpace>
-            </NSpace>
-          </NCard>
+            </NCard>
+
+            <NCard class="workbench-card scholar-card" :bordered="false">
+              <template #header>
+                <div class="section-title">Documents</div>
+              </template>
+              <template #header-extra>
+                <NSpace>
+                  <NTag :type="hasProcessingDocuments ? 'warning' : 'success'" round>
+                    {{ hasProcessingDocuments ? 'Processing' : 'Stable' }}
+                  </NTag>
+                  <NButton size="small" secondary :loading="loading" @click="loadDocuments">Refresh</NButton>
+                </NSpace>
+              </template>
+
+              <NEmpty v-if="documents.length === 0 && !loading" description="No knowledge base documents yet." />
+
+              <div v-else class="kb-document-table">
+                <div class="kb-document-table__head">
+                  <span>Filename</span>
+                  <span>Type</span>
+                  <span>Size</span>
+                  <span>Status</span>
+                  <span>Visibility</span>
+                  <span>Updated</span>
+                  <span>Actions</span>
+                </div>
+                <article
+                  v-for="item in documents"
+                  :key="item.id"
+                  class="kb-document-row"
+                  :class="{ 'kb-document-row--selected': previewDocument?.id === item.id }"
+                >
+                  <div class="kb-document-name">
+                    <span class="kb-file-badge">{{ documentTypeLabel(item) }}</span>
+                    <div>
+                      <strong>{{ item.filename }}</strong>
+                      <small>Document #{{ item.id }} · {{ documentKindText(item) }}</small>
+                      <small v-if="item.errorMessage" class="kb-error-text">{{ item.errorMessage }}</small>
+                    </div>
+                  </div>
+                  <span>{{ documentTypeLabel(item) }}</span>
+                  <span>{{ formatFileSize(item.fileSize) }}</span>
+                  <NTag :type="statusTagType(item.status)" size="small">{{ item.status }}</NTag>
+                  <NTag :type="item.isPublic ? 'info' : 'default'" size="small">
+                    {{ item.isPublic ? 'Public' : 'Private' }}
+                  </NTag>
+                  <span>{{ formatDateTime(item.updatedAt) }}</span>
+                  <NSpace size="small" justify="end">
+                    <NButton text type="primary" @click="handlePreview(item)">Preview</NButton>
+                    <NPopconfirm @positive-click="handleDelete(item.id)">
+                      <template #trigger>
+                        <NButton text type="error">Delete</NButton>
+                      </template>
+                      Delete this document?
+                    </NPopconfirm>
+                  </NSpace>
+                </article>
+              </div>
+            </NCard>
+          </NSpace>
         </NGridItem>
 
-        <NGridItem span="24 l:17">
-          <NCard class="workbench-card" :bordered="false">
-            <template #header><div class="section-title">文档列表</div></template>
+        <NGridItem span="24 xl:8">
+          <NCard class="workbench-card scholar-card kb-preview-side-card" :bordered="false">
+            <template #header>
+              <div class="section-title">Parsed Text Preview</div>
+            </template>
             <template #header-extra>
-              <NSpace>
-                <NButton tertiary @click="router.push('/knowledge-base/search-debug')">检索调试</NButton>
-                <NButton secondary :loading="loading" @click="loadDocuments">刷新</NButton>
-              </NSpace>
+              <NButton size="small" secondary :disabled="!previewData?.content" @click="copyPreviewContent">Copy</NButton>
             </template>
 
-            <NEmpty v-if="documents.length === 0 && !loading" description="还没有知识库文档" />
+            <NSpin :show="previewLoading">
+              <div v-if="previewDocument" class="kb-preview-side">
+                <div class="kb-preview-file-head">
+                  <span class="kb-file-badge kb-file-badge--large">{{ documentTypeLabel(previewDocument) }}</span>
+                  <div>
+                    <strong>{{ previewDocument.filename }}</strong>
+                    <div class="kb-preview__meta">
+                      <NTag :type="statusTagType(previewDocument.status)" size="small">{{ previewDocument.status }}</NTag>
+                      <NTag :type="previewDocument.isPublic ? 'info' : 'default'" size="small">
+                        {{ previewDocument.isPublic ? 'Public' : 'Private' }}
+                      </NTag>
+                    </div>
+                  </div>
+                </div>
 
-            <div v-else class="kb-document-grid">
-              <article v-for="item in documents" :key="item.id" class="kb-document-card">
-                <div class="kb-document-card__main">
-                  <div class="kb-filename">{{ item.filename }}</div>
-                  <div class="chat-hint">#{{ item.id }} · {{ item.mimeType || '未知类型' }} · {{ formatFileSize(item.fileSize) }}</div>
-                  <div v-if="item.errorMessage" class="kb-error-text">{{ item.errorMessage }}</div>
+                <div class="kb-preview-stat-grid">
+                  <div>
+                    <span>File size</span>
+                    <strong>{{ formatFileSize(previewDocument.fileSize) }}</strong>
+                  </div>
+                  <div>
+                    <span>Updated</span>
+                    <strong>{{ formatDateTime(previewDocument.updatedAt) }}</strong>
+                  </div>
+                  <div>
+                    <span>Preview chunks</span>
+                    <strong>{{ previewData ? `${previewData.previewChunks}/${previewData.totalChunks}` : '-' }}</strong>
+                  </div>
+                  <div>
+                    <span>Max chars</span>
+                    <strong>{{ previewData?.maxChars ?? '-' }}</strong>
+                  </div>
                 </div>
-                <div class="kb-document-card__side">
-                  <NSpace justify="end">
-                    <NTag :type="statusTagType(item.status)">{{ item.status }}</NTag>
-                    <NTag :type="item.isPublic ? 'info' : 'default'">{{ item.isPublic ? '公开' : '私有' }}</NTag>
-                  </NSpace>
-                  <div class="chat-hint">{{ formatDateTime(item.updatedAt) }}</div>
-                  <NPopconfirm @positive-click="handleDelete(item.id)">
-                    <template #trigger><NButton text type="error">删除</NButton></template>
-                    确认删除该文档？
-                  </NPopconfirm>
-                </div>
-              </article>
-            </div>
+
+                <NAlert v-if="previewData?.truncated" type="warning" title="Truncated preview">
+                  Showing the first {{ previewData.maxChars }} characters. The full text still participates in retrieval.
+                </NAlert>
+                <NAlert v-if="previewData && !previewData.content" type="info" title="No parsed text yet">
+                  The document may still be processing, or no text could be extracted.
+                </NAlert>
+                <pre v-if="previewData?.content" class="kb-preview__content">{{ previewData.content }}</pre>
+              </div>
+              <NEmpty v-else description="Select Preview on a document to inspect parsed text." />
+            </NSpin>
           </NCard>
         </NGridItem>
       </NGrid>
@@ -98,12 +199,21 @@ import {
   NPopconfirm,
   NProgress,
   NSpace,
+  NSpin,
   NTag,
 } from 'naive-ui';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import AppLayout from '@/components/AppLayout.vue';
-import { deleteKbDocument, listKbDocuments, mergeKbUpload, uploadChunk, type KbDocumentItem } from '@/api/knowledge';
+import {
+  deleteKbDocument,
+  listKbDocuments,
+  mergeKbUpload,
+  previewKbDocument,
+  uploadChunk,
+  type KbDocumentItem,
+  type KbDocumentPreviewResponse,
+} from '@/api/knowledge';
 import { ui } from '@/ui';
 
 const CHUNK_SIZE = 1024 * 1024;
@@ -118,12 +228,21 @@ const uploadProgress = ref(0);
 const uploadStatusText = ref('');
 const loading = ref(false);
 const documents = ref<KbDocumentItem[]>([]);
+const previewLoading = ref(false);
+const previewData = ref<KbDocumentPreviewResponse | null>(null);
+const previewDocument = ref<KbDocumentItem | null>(null);
 let pollingTimer: number | null = null;
 
 const hasProcessingDocuments = computed(() =>
   documents.value.some((item) => item.status === 'PROCESSING' || item.status === 'UPLOADING'),
 );
 const readyCount = computed(() => documents.value.filter((item) => item.status === 'READY').length);
+const processingCount = computed(() =>
+  documents.value.filter((item) => item.status === 'PROCESSING' || item.status === 'UPLOADING').length,
+);
+const totalStorageText = computed(() =>
+  formatFileSize(documents.value.reduce((total, item) => total + (item.fileSize || 0), 0)),
+);
 
 onMounted(async () => {
   await loadDocuments();
@@ -148,7 +267,7 @@ function clearSelectedFile() {
 async function handleUpload() {
   const file = selectedFile.value;
   if (!file) {
-    ui.message.warning('请先选择文件');
+    ui.message.warning('Please choose a file first.');
     return;
   }
 
@@ -173,7 +292,7 @@ async function handleUpload() {
       uploadProgress.value = Math.round(((index + 1) / totalChunks) * 90);
     }
 
-    uploadStatusText.value = '正在合并分片并提交后台处理';
+    uploadStatusText.value = 'Merging chunks and submitting the document for background parsing.';
     await mergeKbUpload({
       uploadId,
       filename: file.name,
@@ -183,12 +302,12 @@ async function handleUpload() {
     });
 
     uploadProgress.value = 100;
-    uploadStatusText.value = '上传完成，等待后台处理';
-    ui.message.success('上传成功，文档正在处理中');
+    uploadStatusText.value = 'Upload complete. Waiting for parsing.';
+    ui.message.success('Upload complete. The document is processing.');
     clearSelectedFile();
     await loadDocuments();
   } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '上传失败');
+    ui.message.error(error.response?.data?.message || 'Upload failed.');
   } finally {
     uploading.value = false;
   }
@@ -199,13 +318,16 @@ async function loadDocuments() {
   try {
     const { data } = await listKbDocuments();
     documents.value = data;
+    if (previewDocument.value) {
+      previewDocument.value = data.find((item) => item.id === previewDocument.value?.id) || previewDocument.value;
+    }
     if (data.some((item) => item.status === 'PROCESSING' || item.status === 'UPLOADING')) {
       ensurePolling();
     } else {
       stopPolling();
     }
   } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '加载知识库文档失败');
+    ui.message.error(error.response?.data?.message || 'Failed to load knowledge documents.');
   } finally {
     loading.value = false;
   }
@@ -214,10 +336,41 @@ async function loadDocuments() {
 async function handleDelete(documentId: number) {
   try {
     await deleteKbDocument(documentId);
-    ui.message.success('文档已删除');
+    ui.message.success('Document deleted.');
+    if (previewDocument.value?.id === documentId) {
+      previewDocument.value = null;
+      previewData.value = null;
+    }
     await loadDocuments();
   } catch (error: any) {
-    ui.message.error(error.response?.data?.message || '删除文档失败');
+    ui.message.error(error.response?.data?.message || 'Delete failed.');
+  }
+}
+
+async function handlePreview(document: KbDocumentItem) {
+  previewDocument.value = document;
+  previewData.value = null;
+  previewLoading.value = true;
+  try {
+    const { data } = await previewKbDocument(document.id, 20000);
+    previewData.value = data;
+  } catch (error: any) {
+    ui.message.error(error.response?.data?.message || 'Failed to load preview.');
+  } finally {
+    previewLoading.value = false;
+  }
+}
+
+async function copyPreviewContent() {
+  const content = previewData.value?.content;
+  if (!content) {
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(content);
+    ui.message.success('Preview content copied.');
+  } catch {
+    ui.message.error('Copy failed. Please select the text manually.');
   }
 }
 
@@ -247,7 +400,7 @@ async function uploadChunkWithRetry(payload: {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      uploadStatusText.value = `正在上传分片 ${payload.chunkNumber + 1} / ${payload.totalChunks}（第 ${attempt} 次尝试）`;
+      uploadStatusText.value = `Uploading chunk ${payload.chunkNumber + 1}/${payload.totalChunks}, attempt ${attempt}.`;
       await uploadChunk(payload);
       return;
     } catch (error) {
@@ -268,6 +421,35 @@ function statusTagType(status: string) {
     return 'warning';
   }
   return 'default';
+}
+
+function documentTypeLabel(item: KbDocumentItem) {
+  const name = item.filename.toLowerCase();
+  const mime = (item.mimeType || '').toLowerCase();
+  if (name.endsWith('.pdf') || mime.includes('pdf')) {
+    return 'PDF';
+  }
+  if (name.endsWith('.docx') || mime.includes('word')) {
+    return 'DOCX';
+  }
+  if (name.endsWith('.md') || mime.includes('markdown')) {
+    return 'MD';
+  }
+  if (name.endsWith('.txt') || mime.includes('text')) {
+    return 'TXT';
+  }
+  return 'FILE';
+}
+
+function documentKindText(item: KbDocumentItem) {
+  const descriptions: Record<string, string> = {
+    PDF: 'PDF document',
+    DOCX: 'Word document',
+    MD: 'Markdown file',
+    TXT: 'Text file',
+    FILE: 'Document file',
+  };
+  return descriptions[documentTypeLabel(item)] || 'Document file';
 }
 
 function formatDateTime(value: string | null) {

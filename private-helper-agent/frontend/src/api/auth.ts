@@ -12,7 +12,7 @@ export interface UserMeResponse {
   username: string;
 }
 
-export function register(payload: { username: string; password: string }) {
+export function register(payload: { username: string; password: string; inviteCode?: string }) {
   return http.post<AuthResponse>('/auth/register', payload);
 }
 

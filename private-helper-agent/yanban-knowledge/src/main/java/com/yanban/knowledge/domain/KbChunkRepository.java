@@ -20,5 +20,9 @@ public interface KbChunkRepository extends JpaRepository<KbChunk, Long> {
 
     List<KbChunk> findByDocumentIdOrderByChunkIndexAsc(Long documentId);
 
+    List<KbChunk> findByDocumentIdOrderByChunkIndexAsc(Long documentId, Pageable pageable);
+
+    int countByDocumentId(Long documentId);
+
     void deleteByDocumentId(Long documentId);
 }

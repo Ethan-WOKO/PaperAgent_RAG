@@ -1,6 +1,6 @@
 <template>
   <AppLayout>
-    <div class="paper-page workbench-page">
+    <div class="paper-page workbench-page scholar-page scholar-page--paper">
       <section class="workbench-hero">
         <div>
           <div class="workbench-kicker">Paper workflow</div>
@@ -27,6 +27,380 @@
           </div>
         </div>
       </section>
+
+      <section class="paper-polish-hero">
+        <div>
+          <div class="workbench-kicker">Academic Writing</div>
+          <h1>Paper Polish Workspace</h1>
+          <p>Revise manuscripts with retrieval-backed critique, citation support, live task events, and export-ready artifacts.</p>
+        </div>
+        <NSpace align="center">
+          <NButton secondary @click="startNewPaperTask">New polish</NButton>
+          <NButton secondary :loading="historyLoading" @click="loadHistory">Save draft</NButton>
+          <NButton type="primary" :loading="submitting" @click="handleSubmit">Run Workflow</NButton>
+        </NSpace>
+      </section>
+
+      <div class="paper-polish-shell">
+        <main class="paper-polish-main">
+          <NGrid :cols="24" :x-gap="14" :y-gap="14" responsive="screen" item-responsive>
+            <NGridItem span="24 l:11">
+              <NCard class="workbench-card scholar-card paper-polish-card paper-input-card" :bordered="false">
+                <template #header>
+                  <div class="section-title">Input Manuscript</div>
+                </template>
+                <input ref="texInputRef" type="file" accept=".tex" class="kb-file-input" @change="handleTexFileChange" />
+                <input ref="bibInputRef" type="file" accept=".bib" class="kb-file-input" @change="handleBibFileChange" />
+
+                <div class="paper-polish-dropzone" @click="texInputRef?.click()">
+                  <div class="paper-file-chip">TEX</div>
+                  <div>
+                    <strong>{{ selectedTexFile?.name || currentTask?.sourceFilename || 'Choose main.tex' }}</strong>
+                    <span>
+                      {{ selectedTexFile ? formatFileSize(selectedTexFile.size) : (currentTask?.sourceFilename ? `Task #${currentTask.id}` : 'Drag and drop your LaTeX entry file, or click to browse') }}
+                    </span>
+                  </div>
+                  <NTag :type="selectedTexFile || currentTask ? 'success' : 'default'" round>
+                    {{ selectedTexFile || currentTask ? 'Ready' : 'Required' }}
+                  </NTag>
+                </div>
+
+                <div class="paper-input-actions">
+                  <NButton v-if="currentTask" secondary @click="startNewPaperTask">Start new task</NButton>
+                  <NButton secondary @click="texInputRef?.click()">Upload New</NButton>
+                  <NButton secondary @click="bibInputRef?.click()">
+                    {{ selectedBibFile ? selectedBibFile.name : 'Attach .bib file' }}
+                  </NButton>
+                </div>
+
+                <div class="paper-config-grid">
+                  <NForm :model="form" label-placement="top">
+                    <NGrid :cols="24" :x-gap="12" responsive="screen" item-responsive>
+                      <NFormItemGi span="24 m:8" label="Target language">
+                        <NSelect v-model:value="form.targetLanguage" :options="languageOptions" />
+                      </NFormItemGi>
+                      <NFormItemGi span="24 m:8" label="Score threshold">
+                        <NInputNumber v-model:value="form.scoreThreshold" :min="0" :max="100" style="width: 100%" />
+                      </NFormItemGi>
+                      <NFormItemGi span="24 m:8" label="Max rounds">
+                        <NInputNumber v-model:value="form.maxRounds" :min="1" :max="20" style="width: 100%" />
+                      </NFormItemGi>
+                      <NFormItemGi span="24 m:8" label="Section attempts">
+                        <NInputNumber v-model:value="form.innerMaxAttempts" :min="1" :max="20" style="width: 100%" />
+                      </NFormItemGi>
+                      <NFormItemGi span="24 m:8" label="Min literature">
+                        <NInputNumber v-model:value="form.literatureMinCount" :min="1" :max="form.literatureCount" style="width: 100%" />
+                      </NFormItemGi>
+                      <NFormItemGi span="24 m:8" label="Max literature">
+                        <NInputNumber v-model:value="form.literatureCount" :min="form.literatureMinCount" :max="100" style="width: 100%" />
+                      </NFormItemGi>
+                    </NGrid>
+                  </NForm>
+                  <div class="paper-literature-switch">
+                    <div>
+                      <strong>Literature-only mode</strong>
+                      <span>Skip full rewrite and only generate citation recommendations.</span>
+                    </div>
+                    <NSwitch v-model:value="form.literatureOnly" />
+                  </div>
+                </div>
+              </NCard>
+            </NGridItem>
+
+            <NGridItem span="24 l:13">
+              <NCard class="workbench-card scholar-card paper-polish-card paper-status-card-v2" :bordered="false">
+                <template #header>
+                  <div class="section-title">Task Status</div>
+                </template>
+                <template #header-extra>
+                  <NTag :type="currentTask ? statusTagType(currentTask.status) : 'default'" round>
+                    {{ currentTask?.status || 'No task' }}
+                  </NTag>
+                </template>
+
+                <div class="paper-status-v2">
+                  <div class="paper-status-v2__meta">
+                    <div><span>Project</span><strong>{{ currentTask?.title || currentTask?.sourceFilename || 'New manuscript polish' }}</strong></div>
+                    <div><span>Mode</span><strong>{{ form.literatureOnly ? 'Literature recommendation' : 'Full paper polish' }}</strong></div>
+                    <div><span>Owner</span><strong>Current researcher</strong></div>
+                  </div>
+                  <div class="paper-status-v2__progress">
+                    <div class="paper-status-progress-head">
+                      <span>Overall progress</span>
+                      <strong>{{ progressPercent }}%</strong>
+                    </div>
+                    <NProgress type="line" :percentage="progressPercent" :show-indicator="false" status="success" />
+                    <div class="paper-status-v2__facts">
+                      <div><span>Current stage</span><strong>{{ currentStageLabel }}</strong></div>
+                      <div><span>Sections</span><strong>{{ sectionProgressText }}</strong></div>
+                      <div><span>Attempts</span><strong>{{ attemptProgressText }}</strong></div>
+                      <div><span>Started</span><strong>{{ currentTask ? formatDateTime(currentTask.createdAt) : '-' }}</strong></div>
+                    </div>
+                  </div>
+                </div>
+
+                <NAlert v-if="currentTask?.errorMessage" type="error" title="Task error">
+                  {{ currentTask.errorMessage }}
+                </NAlert>
+                <div class="paper-status-actions">
+                  <NButton secondary :disabled="!currentTaskId" @click="refreshTask">Refresh</NButton>
+                  <NButton secondary :disabled="!currentTaskId" @click="connectSse">Reconnect SSE</NButton>
+                  <NButton tertiary :disabled="!canPause" @click="handlePause">Pause</NButton>
+                  <NButton tertiary :disabled="!canResume" @click="handleResume">Resume</NButton>
+                  <NButton tertiary type="error" :disabled="!canStop" @click="handleStop">Stop</NButton>
+                </div>
+              </NCard>
+            </NGridItem>
+          </NGrid>
+
+          <NCard class="workbench-card scholar-card paper-polish-card paper-workflow-card-v2" :bordered="false">
+            <template #header>
+              <div class="section-title">Workflow</div>
+            </template>
+            <div class="paper-workflow-v2">
+              <div class="paper-workflow-step-v2" :class="{ 'paper-workflow-step-v2--done': currentTask || selectedTexFile }">
+                <span>1</span><strong>Upload</strong><small>{{ currentTask || selectedTexFile ? 'Ready' : 'Pending' }}</small>
+              </div>
+              <div class="paper-workflow-step-v2" :class="stageChipClass('PARSE')">
+                <span>2</span><strong>Parse</strong><small>{{ stageLabel('PARSE') }}</small>
+              </div>
+              <div class="paper-workflow-step-v2" :class="stageChipClass('RETRIEVE')">
+                <span>3</span><strong>Literature Retrieval</strong><small>{{ retrievedLiteratureArtifacts.length }} artifacts</small>
+              </div>
+              <div class="paper-workflow-step-v2" :class="stageChipClass('GAP_ANALYSIS')">
+                <span>4</span><strong>Critique</strong><small>{{ suggestions.length }} suggestions</small>
+              </div>
+              <div class="paper-workflow-step-v2" :class="stageChipClass('POLISH')">
+                <span>5</span><strong>Rewrite</strong><small>{{ acceptedSuggestions.length }} accepted</small>
+              </div>
+              <div class="paper-workflow-step-v2" :class="{ 'paper-workflow-step-v2--done': canDownload }">
+                <span>6</span><strong>Export</strong><small>{{ canDownload ? 'Ready' : 'Pending' }}</small>
+              </div>
+            </div>
+          </NCard>
+
+          <NCard class="workbench-card scholar-card paper-polish-card" :bordered="false">
+            <template #header>
+              <div class="section-title">Revision Suggestions</div>
+            </template>
+            <template #header-extra>
+              <NTag type="info" round>{{ suggestions.length }} total</NTag>
+            </template>
+
+            <NEmpty v-if="suggestions.length === 0" description="No revision suggestions yet. Run a workflow or open a completed task." />
+            <div v-else class="paper-suggestion-table-v2">
+              <div class="paper-suggestion-table-v2__head">
+                <span>Suggestion</span>
+                <span>Evidence</span>
+                <span>Severity</span>
+                <span>State</span>
+                <span>Actions</span>
+              </div>
+              <article v-for="suggestion in visibleSuggestions" :key="suggestion.id" class="paper-suggestion-row-v2">
+                <div>
+                  <strong>{{ suggestion.category }}</strong>
+                  <p>{{ suggestion.statement }}</p>
+                </div>
+                <span>{{ suggestion.evidenceCount }} evidence cards</span>
+                <NTag :type="suggestion.severity === 'HIGH' ? 'error' : suggestion.severity === 'LOW' ? 'success' : 'warning'" size="small">
+                  {{ suggestion.severity || 'Info' }}
+                </NTag>
+                <NTag :type="suggestion.status === 'ACCEPTED' ? 'success' : suggestion.status === 'REJECTED' ? 'error' : 'info'" size="small">
+                  {{ suggestion.status }}
+                </NTag>
+                <NSpace size="small">
+                  <NCheckbox
+                    :checked="suggestion.status === 'ACCEPTED'"
+                    :disabled="!canAcceptSuggestion(suggestion) || suggestionSubmitting === suggestion.id"
+                    @update:checked="(checked) => handleSuggestionChecked(suggestion, checked)"
+                  >
+                    Accept
+                  </NCheckbox>
+                  <NButton v-if="suggestion.status !== 'REJECTED'" size="tiny" tertiary @click="updateSuggestionStatus(suggestion, 'REJECTED')">
+                    Reject
+                  </NButton>
+                </NSpace>
+              </article>
+            </div>
+          </NCard>
+
+          <NCard class="workbench-card scholar-card paper-polish-card" :bordered="false">
+            <template #header>
+              <div class="section-title">Evidence Snippets</div>
+            </template>
+            <div v-if="literatureSupportCards.length > 0" class="paper-evidence-grid-v2">
+              <article v-for="card in literatureSupportCards" :key="card.id" class="paper-evidence-card-v2">
+                <strong>{{ card.title }}</strong>
+                <span>{{ card.authors || 'Unknown authors' }} · {{ card.publicationYear || '-' }} · {{ card.venue || '-' }}</span>
+                <p>{{ card.citationCount == null ? 'Citation metadata unavailable.' : `${card.citationCount} citations found in metadata.` }}</p>
+                <div>
+                  <NTag size="small" type="success">Evidence</NTag>
+                  <a v-if="card.url || card.doi" :href="card.url || doiUrl(card.doi)" target="_blank" rel="noreferrer">View source</a>
+                </div>
+              </article>
+            </div>
+            <NEmpty v-else description="No evidence snippets yet." />
+          </NCard>
+        </main>
+
+        <aside class="paper-polish-side">
+          <NCard class="workbench-card scholar-card paper-polish-card" :bordered="false">
+            <template #header>
+              <div class="section-title">Literature Support</div>
+            </template>
+            <template #header-extra>
+              <NTag type="info" round>{{ bibliographyCards.length }}</NTag>
+            </template>
+            <div class="paper-support-list-v2">
+              <article v-for="card in literatureSupportCards" :key="`support-${card.id}`" class="paper-support-card-v2">
+                <div>
+                  <strong>{{ card.title }}</strong>
+                  <span>{{ card.authors || 'Unknown authors' }} · {{ card.publicationYear || '-' }}</span>
+                  <p>{{ card.venue || 'Venue unavailable' }}</p>
+                </div>
+                <NTag type="success" size="small">Support</NTag>
+              </article>
+              <NEmpty v-if="literatureSupportCards.length === 0" description="No literature support yet." />
+            </div>
+          </NCard>
+
+          <NCard class="workbench-card scholar-card paper-polish-card" :bordered="false">
+            <template #header>
+              <div class="section-title">Export Artifacts</div>
+            </template>
+            <template #header-extra>
+              <NButton size="small" secondary :disabled="!canDownload" :loading="downloading" @click="handleDownload">Download</NButton>
+            </template>
+            <div class="paper-artifact-list-v2">
+              <article v-for="artifact in exportArtifacts" :key="artifact.id" class="paper-artifact-row-v2">
+                <span>{{ artifactDisplayName(artifact).slice(0, 2).toUpperCase() }}</span>
+                <div>
+                  <strong>{{ artifactDisplayName(artifact) }}</strong>
+                  <small>v{{ artifact.version }} · {{ formatDateTime(artifact.createdAt) }}</small>
+                </div>
+              </article>
+              <NEmpty v-if="exportArtifacts.length === 0" description="No export artifacts yet." />
+            </div>
+          </NCard>
+
+          <NCard class="workbench-card scholar-card paper-polish-card" :bordered="false">
+            <template #header>
+              <div class="section-title">Live Task Events</div>
+            </template>
+            <template #header-extra>
+              <NTag :type="sseStatus === 'connected' ? 'success' : 'default'" round>SSE {{ sseStatusText }}</NTag>
+            </template>
+            <div class="paper-live-events-v2">
+              <article v-for="(event, index) in liveTaskEvents" :key="`${event.timestamp}-${index}`">
+                <i />
+                <span>{{ formatDateTime(event.timestamp) }}</span>
+                <strong>{{ event.message }}</strong>
+              </article>
+              <NEmpty v-if="liveTaskEvents.length === 0" description="No live events yet." />
+            </div>
+          </NCard>
+
+          <NCard class="workbench-card scholar-card paper-polish-card" :bordered="false">
+            <template #header>
+              <div class="section-title">History</div>
+            </template>
+            <template #header-extra>
+              <NButton size="small" secondary :loading="historyLoading" @click="loadHistory">Refresh</NButton>
+            </template>
+            <div class="paper-history-compact-v2">
+              <article v-for="task in historyTasks" :key="task.id" :class="{ 'paper-history-compact-v2--active': task.id === currentTaskId }">
+                <button type="button" @click="openHistoryTask(task.id)">{{ task.title || task.sourceFilename || `Task ${task.id}` }}</button>
+                <NTag size="small" :type="statusTagType(task.status)">{{ task.status }}</NTag>
+              </article>
+              <NEmpty v-if="historyTasks.length === 0" description="No history yet." />
+            </div>
+          </NCard>
+        </aside>
+      </div>
+
+      <NCard class="workbench-card scholar-card paper-polish-card paper-review-workspace-v2" :bordered="false">
+        <template #header>
+          <div class="section-title">Review Workspace</div>
+        </template>
+        <NTabs type="segment" animated>
+          <NTabPane name="clarification" :tab="pendingClarifications.length ? `Clarifications (${pendingClarifications.length})` : 'Clarifications'">
+            <div v-if="clarifications.length > 0" class="paper-clarification-panel">
+              <NAlert v-if="pendingBlockingClarifications.length > 0" type="warning" title="Input required">
+                Some structure questions require confirmation before the workflow continues.
+              </NAlert>
+              <div v-for="item in clarifications" :key="item.id" class="paper-clarification-item">
+                <div class="paper-clarification-item__title">
+                  <span>{{ clarificationQuestion(item).message || item.type }}</span>
+                  <NTag size="small" :type="item.status === 'PENDING' ? 'warning' : 'success'">{{ item.status }}</NTag>
+                </div>
+                <NRadioGroup v-if="item.status === 'PENDING'" v-model:value="clarificationAnswers[item.id]" class="paper-option-group">
+                  <NSpace vertical size="small">
+                    <NRadio v-for="option in clarificationOptions(item).options" :key="option" :value="option">{{ option }}</NRadio>
+                  </NSpace>
+                </NRadioGroup>
+                <div v-else class="paper-clarification-item__answer">{{ answeredOption(item) }}</div>
+                <NSpace v-if="item.status === 'PENDING'" size="small">
+                  <NButton size="small" type="primary" :loading="clarificationSubmitting" @click="submitClarification(item)">Submit</NButton>
+                  <NButton v-if="!clarificationQuestion(item).blocking" size="small" tertiary :loading="clarificationSubmitting" @click="skipClarification(item)">Skip</NButton>
+                </NSpace>
+              </div>
+              <NButton v-if="pendingClarifications.length > 0" secondary block :loading="clarificationSubmitting" @click="keepAllClarifications">
+                Keep all defaults
+              </NButton>
+            </div>
+            <NEmpty v-else description="No clarifications yet." />
+          </NTabPane>
+
+          <NTabPane name="sections" :tab="`Sections (${sections.length})`">
+            <div v-if="sections.length > 0" class="paper-section-role-panel">
+              <div v-for="section in sections" :key="section.id" class="paper-section-role-row">
+                <div>
+                  <strong>{{ section.orderIndex + 1 }}. {{ section.title }}</strong>
+                  <small>{{ section.roleSource || 'auto' }} · confidence {{ formatConfidence(section.roleConfidence) }}</small>
+                </div>
+                <NSelect :value="section.role" :options="sectionRoleOptions" size="small" @update:value="(role) => handleSectionRoleChange(section.id, role)" />
+              </div>
+            </div>
+            <NEmpty v-else description="No section roles yet." />
+          </NTabPane>
+
+          <NTabPane name="preview" :tab="`Preview (${previewSections.length + suggestions.length})`">
+            <div class="paper-preview-panel">
+              <NButtonGroup>
+                <NButton :type="previewMode === 'basic' ? 'primary' : 'default'" size="small" @click="previewMode = 'basic'">Recommendations</NButton>
+                <NButton :type="previewMode === 'advanced' ? 'primary' : 'default'" size="small" @click="previewMode = 'advanced'">Diff + cite patch</NButton>
+              </NButtonGroup>
+              <div v-for="section in previewSections" :key="`preview-${section.id}`" class="paper-diff-card">
+                <div class="paper-diff-card__title">{{ section.orderIndex + 1 }}. {{ section.title }} · {{ section.polishStatus || 'NOT_POLISHED' }}</div>
+                <pre v-if="section.diffJson" class="paper-code-preview">{{ prettyJson(section.diffJson) }}</pre>
+                <pre v-else-if="section.reviewJson" class="paper-code-preview">{{ prettyJson(section.reviewJson) }}</pre>
+              </div>
+              <div v-for="suggestion in suggestions" :key="suggestion.id" class="paper-suggestion-card" :class="`paper-suggestion-card--${suggestion.honestyGrade}`">
+                <strong>{{ suggestion.category }} · {{ suggestion.severity || '-' }}</strong>
+                <p>{{ suggestion.statement }}</p>
+                <small>{{ suggestion.honestyReason }} · evidence {{ suggestion.evidenceCount }} · {{ suggestion.track }} · {{ suggestion.status }}</small>
+                <pre v-if="suggestion.patchJson && previewMode === 'advanced'" class="paper-code-preview">{{ prettyJson(suggestion.patchJson) }}</pre>
+              </div>
+              <NEmpty v-if="suggestions.length === 0 && previewSections.length === 0" description="No preview results yet." />
+            </div>
+          </NTabPane>
+
+          <NTabPane name="report" :tab="`Report (${bibliographyCards.length})`">
+            <div class="paper-report-panel">
+              <div v-for="card in bibliographyCards" :key="`bib-${card.id}`" class="paper-bib-card">
+                <strong>{{ card.title }}</strong>
+                <small>{{ card.authors || 'Unknown authors' }} · {{ card.publicationYear || '-' }} · {{ card.venue || '-' }}</small>
+                <div class="paper-bib-card__links">
+                  <a v-if="card.doi" :href="doiUrl(card.doi)" target="_blank" rel="noreferrer">DOI: {{ card.doi }}</a>
+                  <a v-if="card.url" :href="card.url" target="_blank" rel="noreferrer">URL</a>
+                  <a v-if="card.pdfUrl" :href="card.pdfUrl" target="_blank" rel="noreferrer">PDF</a>
+                </div>
+              </div>
+              <NEmpty v-if="bibliographyCards.length === 0" description="No bibliography report yet." />
+            </div>
+          </NTabPane>
+        </NTabs>
+      </NCard>
 
       <div class="paper-steps-bar">
         <div class="paper-step" :class="{ 'paper-step--active': !currentTask }">
@@ -526,6 +900,10 @@ const bibliographyCards = computed(() => {
     return true;
   });
 });
+const visibleSuggestions = computed(() => suggestions.value.slice(0, 5));
+const literatureSupportCards = computed(() => bibliographyCards.value);
+const exportArtifacts = computed(() => artifacts.value.filter((item) => downloadableArtifactTypes.includes(item.type)));
+const liveTaskEvents = computed(() => events.value);
 const latestProgressEvent = computed(() => [...events.value].reverse().find((event) => hasProgressMeta(event)) || null);
 const stageSteps = [
   { stage: 'PARSE', label: '解析' },
@@ -599,6 +977,32 @@ watch(
 onBeforeUnmount(() => {
   abortController?.abort();
 });
+
+async function startNewPaperTask() {
+  abortController?.abort();
+  abortController = null;
+  currentTask.value = null;
+  events.value = [];
+  clarifications.value = [];
+  sections.value = [];
+  suggestions.value = [];
+  artifacts.value = [];
+  analysis.value = null;
+  selectedTexFile.value = null;
+  selectedBibFile.value = null;
+  sseStatus.value = 'idle';
+  Object.keys(clarificationAnswers).forEach((key) => {
+    delete clarificationAnswers[Number(key)];
+  });
+  if (texInputRef.value) {
+    texInputRef.value.value = '';
+  }
+  if (bibInputRef.value) {
+    bibInputRef.value.value = '';
+  }
+  await router.replace({ path: '/paper' });
+  ui.message.info('Ready to start a new paper polish task.');
+}
 
 function handleTexFileChange(event: Event) {
   const target = event.target as HTMLInputElement;

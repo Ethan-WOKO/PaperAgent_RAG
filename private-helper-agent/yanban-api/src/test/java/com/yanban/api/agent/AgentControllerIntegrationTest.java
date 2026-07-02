@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -14,14 +16,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.core.model.ChatRequest;
 import com.yanban.core.model.ChatMessage;
 import com.yanban.core.model.ChatModelProvider;
 import com.yanban.core.model.ChatResponse;
+import com.yanban.core.model.ToolCall;
 import com.yanban.paper.literature.AdHocLiteratureSearchService;
 import com.yanban.paper.literature.AdHocLiteratureSearchService.AdHocLiteratureItem;
 import com.yanban.paper.literature.AdHocLiteratureSearchService.AdHocLiteratureSearchResult;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -89,6 +94,114 @@ class AgentControllerIntegrationTest {
         JsonNode messages = objectMapper.readTree(messagesResult.getResponse().getContentAsString());
         assertThat(messages.get(0).get("sessionId").asLong()).isEqualTo(sessionId);
         assertThat(messages.get(1).get("sessionId").asLong()).isEqualTo(sessionId);
+    }
+
+    @Test
+    void runtimeIdentityQuestionUsesConfiguredProviderWithoutCallingModel() throws Exception {
+        String token = registerAndGetToken("agent_user_identity");
+        long sessionId = createSession(token, "Identity");
+
+        mockMvc.perform(patch("/api/v1/agent/sessions/{id}", sessionId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"modelProvider\":\"glm\",\"model\":\"glm-4.5-air\"}"))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/v1/agent/sessions/{id}/messages", sessionId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"\\u4f60\\u662f\\u4ec0\\u4e48\\u6a21\\u578b\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.steps").value(0))
+                .andExpect(jsonPath("$.assistantContent").value(org.hamcrest.Matchers.containsString("provider=glm")))
+                .andExpect(jsonPath("$.assistantContent").value(org.hamcrest.Matchers.containsString("model=glm-4.5-air")))
+                .andExpect(jsonPath("$.assistantContent").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("我是Claude"))))
+                .andExpect(jsonPath("$.messages.length()").value(2));
+
+        verify(chatModelProvider, times(0)).chat(any());
+    }
+
+    @Test
+    void ordinaryMessagesIncludeRuntimeIdentityGuardButDoNotPersistIt() throws Exception {
+        when(chatModelProvider.providerName()).thenReturn("mock");
+        when(chatModelProvider.chat(any()))
+                .thenReturn(new ChatResponse(ChatMessage.assistant("guarded answer"), "stop", null));
+        String token = registerAndGetToken("agent_user_identity_guard");
+        long sessionId = createSession(token, "Guard");
+
+        mockMvc.perform(post("/api/v1/agent/sessions/{id}/messages", sessionId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"hello\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.messages.length()").value(2));
+
+        ArgumentCaptor<ChatRequest> captor = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(chatModelProvider).chat(captor.capture());
+        assertThat(captor.getValue().messages())
+                .anySatisfy(message -> {
+                    assertThat(message.role()).isEqualTo("system");
+                    assertThat(message.content()).contains("Runtime identity guard");
+                    assertThat(message.content()).contains("provider is \"deepseek\"");
+                });
+
+        mockMvc.perform(get("/api/v1/agent/sessions/{id}/messages", sessionId)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].role").value("user"))
+                .andExpect(jsonPath("$[1].role").value("assistant"));
+    }
+
+    @Test
+    void persistedToolMessagesKeepToolCallIdInNextModelRequest() throws Exception {
+        when(chatModelProvider.providerName()).thenReturn("mock");
+        when(chatModelProvider.chat(any()))
+                .thenReturn(new ChatResponse(
+                        new ChatMessage("assistant", null, List.of(new ToolCall(
+                                "call-1",
+                                "function",
+                                new ToolCall.FunctionCall("echo", "{\"message\":\"hello\"}")
+                        )), null),
+                        "tool_calls",
+                        null
+                ))
+                .thenReturn(new ChatResponse(ChatMessage.assistant("tool done"), "stop", null))
+                .thenReturn(new ChatResponse(ChatMessage.assistant("second done"), "stop", null));
+        String token = registerAndGetToken("agent_user_tool_call_id");
+        long sessionId = createSession(token, "Tool History");
+
+        mockMvc.perform(post("/api/v1/agent/sessions/{id}/messages", sessionId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"please call echo\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        mockMvc.perform(get("/api/v1/agent/sessions/{id}/messages", sessionId)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[2].role").value("tool"))
+                .andExpect(jsonPath("$[2].toolCallId").value("call-1"));
+
+        mockMvc.perform(post("/api/v1/agent/sessions/{id}/messages", sessionId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"continue\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        ArgumentCaptor<ChatRequest> captor = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(chatModelProvider, times(3)).chat(captor.capture());
+
+        ChatRequest secondUserRequest = captor.getAllValues().get(2);
+        assertThat(secondUserRequest.messages())
+                .filteredOn(message -> "tool".equals(message.role()))
+                .singleElement()
+                .extracting(ChatMessage::toolCallId)
+                .isEqualTo("call-1");
     }
 
     @Test

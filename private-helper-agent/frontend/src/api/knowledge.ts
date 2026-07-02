@@ -23,6 +23,19 @@ export interface KbDocumentResponse {
   updatedAt: string;
 }
 
+export interface KbDocumentPreviewResponse {
+  id: number;
+  filename: string;
+  status: string;
+  mimeType: string | null;
+  fileSize: number | null;
+  totalChunks: number;
+  previewChunks: number;
+  maxChars: number;
+  truncated: boolean;
+  content: string;
+}
+
 export interface KnowledgeSearchResult {
   documentId: number;
   filename: string;
@@ -38,6 +51,12 @@ export function listKbDocuments() {
 
 export function deleteKbDocument(documentId: number) {
   return http.delete(`/kb/documents/${documentId}`);
+}
+
+export function previewKbDocument(documentId: number, maxChars = 20000) {
+  return http.get<KbDocumentPreviewResponse>(`/kb/documents/${documentId}/preview`, {
+    params: { maxChars },
+  });
 }
 
 export function uploadChunk(payload: {

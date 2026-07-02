@@ -4,16 +4,24 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
+import java.net.SocketException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeoutException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
 
 public class GlmModelProvider implements ChatModelProvider {
+
+    private static final int MAX_TRANSPORT_RETRIES = 2;
 
     private final GlmProperties properties;
     private final WebClient webClient;
@@ -42,6 +50,7 @@ public class GlmModelProvider implements ChatModelProvider {
             GlmChatResponse response = webClient.post()
                     .uri(properties.getApiUrl())
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + resolveApiKey(request.apiKey()))
+                    .headers(headers -> applyTraceHeader(headers, request.traceId()))
                     .contentType(MediaType.APPLICATION_JSON)
                     .accept(MediaType.APPLICATION_JSON)
                     .bodyValue(payload)
@@ -51,6 +60,7 @@ public class GlmModelProvider implements ChatModelProvider {
                             .flatMap(body -> Mono.error(new ModelProviderException(
                                     "GLM API error: HTTP " + clientResponse.statusCode().value() + " " + body))))
                     .bodyToMono(GlmChatResponse.class)
+                    .retryWhen(transportRetrySpec())
                     .block(properties.getTimeout());
             return fromGlmResponse(response);
         } catch (WebClientResponseException ex) {
@@ -58,7 +68,7 @@ public class GlmModelProvider implements ChatModelProvider {
         } catch (ModelProviderException ex) {
             throw ex;
         } catch (RuntimeException ex) {
-            throw new ModelProviderException("GLM API request failed", ex);
+            throw new ModelProviderException("GLM API request failed: " + transportFailureMessage(ex), ex);
         }
     }
 
@@ -69,6 +79,7 @@ public class GlmModelProvider implements ChatModelProvider {
         return webClient.post()
                 .uri(properties.getApiUrl())
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + resolveApiKey(request.apiKey()))
+                .headers(headers -> applyTraceHeader(headers, request.traceId()))
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.TEXT_EVENT_STREAM)
                 .bodyValue(payload)
@@ -78,8 +89,39 @@ public class GlmModelProvider implements ChatModelProvider {
                         .flatMap(body -> Mono.error(new ModelProviderException(
                                 "GLM API error: HTTP " + clientResponse.statusCode().value() + " " + body))))
                 .bodyToFlux(String.class)
+                .retryWhen(transportRetrySpec())
                 .flatMapIterable(this::parseSseChunk)
                 .onErrorMap(ex -> ex instanceof ModelProviderException ? ex : new ModelProviderException("GLM API stream failed", ex));
+    }
+
+    private Retry transportRetrySpec() {
+        return Retry.backoff(MAX_TRANSPORT_RETRIES, Duration.ofMillis(300))
+                .maxBackoff(Duration.ofSeconds(2))
+                .filter(this::isTransientTransportError);
+    }
+
+    private boolean isTransientTransportError(Throwable ex) {
+        Throwable root = rootCause(ex);
+        return ex instanceof WebClientRequestException
+                || root instanceof IOException
+                || root instanceof SocketException
+                || root instanceof TimeoutException
+                || root.getClass().getName().contains("PrematureCloseException");
+    }
+
+    private String transportFailureMessage(Throwable ex) {
+        Throwable root = rootCause(ex);
+        String message = root.getMessage();
+        String detail = StringUtils.hasText(message) ? message : root.getClass().getSimpleName();
+        return detail + ". This is a transport/network failure before a usable GLM response was received.";
+    }
+
+    private Throwable rootCause(Throwable ex) {
+        Throwable current = ex;
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        return current;
     }
 
     private void validateConfigured(String apiKeyOverride) {
@@ -88,6 +130,12 @@ public class GlmModelProvider implements ChatModelProvider {
         }
         if (!StringUtils.hasText(resolveApiKey(apiKeyOverride))) {
             throw new ModelProviderException("GLM apiKey is not configured");
+        }
+    }
+
+    private void applyTraceHeader(HttpHeaders headers, String traceId) {
+        if (StringUtils.hasText(traceId)) {
+            headers.set("X-Trace-Id", traceId);
         }
     }
 
@@ -102,7 +150,16 @@ public class GlmModelProvider implements ChatModelProvider {
         List<GlmMessage> messages = request.messages().stream()
                 .map(message -> new GlmMessage(message.role(), message.content(), message.toolCalls(), message.toolCallId()))
                 .toList();
-        return new GlmChatRequest(model, messages, temperature, maxTokens, stream, request.tools());
+        return new GlmChatRequest(
+                model,
+                messages,
+                temperature,
+                maxTokens,
+                stream,
+                request.tools(),
+                request.responseFormat(),
+                request.thinking()
+        );
     }
 
     private ChatResponse fromGlmResponse(GlmChatResponse response) {
@@ -179,8 +236,14 @@ public class GlmModelProvider implements ChatModelProvider {
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    private record GlmChatRequest(String model, List<GlmMessage> messages, Double temperature,
-                                  @JsonProperty("max_tokens") Integer maxTokens, Boolean stream, List<ToolSpec> tools) {}
+    private record GlmChatRequest(String model,
+                                  List<GlmMessage> messages,
+                                  Double temperature,
+                                  @JsonProperty("max_tokens") Integer maxTokens,
+                                  Boolean stream,
+                                  List<ToolSpec> tools,
+                                  @JsonProperty("response_format") ChatRequest.ResponseFormat responseFormat,
+                                  ChatRequest.Thinking thinking) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private record GlmMessage(String role, String content,

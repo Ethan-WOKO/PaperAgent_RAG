@@ -3,7 +3,9 @@ package com.yanban.api.settings;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,15 +23,20 @@ public class UserSettingsService {
     public static final int DEFAULT_MAX_STEPS = 20;
     public static final boolean DEFAULT_RAG_ENABLED = true;
     public static final List<String> DEFAULT_FILESYSTEM_ROOTS = List.of("workspace");
+    public static final List<String> DEFAULT_DEEPSEEK_MODELS = List.of("deepseek-chat", "deepseek-reasoner");
+    public static final List<String> DEFAULT_GLM_MODELS = List.of("glm-4.5-air", "glm-4-flash");
 
     private final SysUserSettingsRepository repository;
+    private final UserModelRepository userModelRepository;
     private final SettingsCryptoService cryptoService;
     private final ObjectMapper objectMapper;
 
     public UserSettingsService(SysUserSettingsRepository repository,
+                               UserModelRepository userModelRepository,
                                SettingsCryptoService cryptoService,
                                ObjectMapper objectMapper) {
         this.repository = repository;
+        this.userModelRepository = userModelRepository;
         this.cryptoService = cryptoService;
         this.objectMapper = objectMapper;
     }
@@ -54,15 +61,137 @@ public class UserSettingsService {
         String encryptedGithubPat = resolveEncryptedApiKey(settings.getGithubPatEncrypted(), request.githubPat());
         String filesystemRootsText = request.filesystemRoots() == null ? settings.getFilesystemRootsText() : writeJson(request.filesystemRoots());
         String disabledSkillsJson = request.disabledSkills() == null ? settings.getDisabledSkillsJson() : writeJson(request.disabledSkills());
+        String deepseekModelsText = request.deepseekModels() == null ? settings.getDeepseekModelsText() : writeJson(request.deepseekModels());
+        String glmModelsText = request.glmModels() == null ? settings.getGlmModelsText() : writeJson(request.glmModels());
         settings.update(provider, encryptedDeepseekApiKey, encryptedGlmApiKey, deepseekModel, glmModel,
-                encryptedGithubPat, filesystemRootsText, disabledSkillsJson, temperature, maxSteps, ragDefaultEnabled);
+                encryptedGithubPat, filesystemRootsText, disabledSkillsJson, temperature, maxSteps, ragDefaultEnabled,
+                deepseekModelsText, glmModelsText);
         return toResponse(repository.saveAndFlush(settings));
     }
 
     @Transactional
     public SysUserSettings getOrCreate(Long userId) {
         return repository.findById(userId)
-                .orElseGet(() -> repository.saveAndFlush(defaultSettings(userId)));
+                .orElseGet(() -> {
+                    try {
+                        SysUserSettings created = repository.saveAndFlush(defaultSettings(userId));
+                        seedBuiltinCustomModels(userId);
+                        return created;
+                    } catch (org.springframework.dao.DataIntegrityViolationException ex) {
+                        // Concurrent request already inserted the row; fall back to re-query.
+                        return repository.findById(userId)
+                                .orElseThrow(() -> ex);
+                    }
+                });
+    }
+
+    // ===== Custom model CRUD =====
+
+    @Transactional
+    public List<UserModelResponse> listCustomModels(Long userId) {
+        ensureUserInitialized(userId);
+        return userModelRepository.findByUserIdOrderBySortOrderAscIdAsc(userId).stream()
+                .map(UserModelResponse::from)
+                .toList();
+    }
+
+    @Transactional
+    public UserModelResponse createCustomModel(Long userId, UserModelRequest request) {
+        ensureUserInitialized(userId);
+        List<UserModel> existing = userModelRepository.findByUserIdOrderBySortOrderAscIdAsc(userId);
+        int nextSortOrder = existing.stream()
+                .filter(m -> !Boolean.TRUE.equals(m.getBuiltin()))
+                .mapToInt(UserModel::getSortOrder)
+                .max()
+                .orElse(100) + 1;
+        String providerKey = "custom-" + System.currentTimeMillis();
+        UserModel model = new UserModel(
+                userId,
+                providerKey,
+                request.label().trim(),
+                request.modelName().trim(),
+                request.apiUrl().trim(),
+                StringUtils.hasText(request.apiKey()) ? cryptoService.encrypt(request.apiKey().trim()) : null,
+                false,
+                nextSortOrder
+        );
+        return UserModelResponse.from(userModelRepository.saveAndFlush(model));
+    }
+
+    @Transactional
+    public UserModelResponse updateCustomModel(Long userId, Long modelId, UserModelRequest request) {
+        UserModel model = findOwnedCustomModel(userId, modelId);
+        String encryptedApiKey = resolveEncryptedApiKey(model.getApiKeyEncrypted(), request.apiKey());
+        model.update(request.label().trim(), request.modelName().trim(), request.apiUrl().trim(), encryptedApiKey);
+        return UserModelResponse.from(userModelRepository.saveAndFlush(model));
+    }
+
+    @Transactional
+    public void deleteCustomModel(Long userId, Long modelId) {
+        UserModel model = findOwnedCustomModel(userId, modelId);
+        userModelRepository.delete(model);
+        userModelRepository.flush();
+    }
+
+    private UserModel findOwnedCustomModel(Long userId, Long modelId) {
+        UserModel model = userModelRepository.findById(modelId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "自定义模型不存在"));
+        if (!model.getUserId().equals(userId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "自定义模型不存在");
+        }
+        if (Boolean.TRUE.equals(model.getBuiltin())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "内置模型不可修改或删除");
+        }
+        return model;
+    }
+
+    private void ensureUserInitialized(Long userId) {
+        getOrCreate(userId);
+    }
+
+    // ===== Model resolution for AgentService =====
+
+    /**
+     * Returns the model config (providerKey, modelName, apiUrl, apiKey) for a given provider snapshot.
+     * For built-in providers (deepseek/glm), uses settings + global config.
+     * For custom providers, looks up the user_models table.
+     */
+    public ModelEndpoint resolveModelEndpoint(Long userId, String provider, String model) {
+        SysUserSettings settings = getOrCreate(userId);
+        String resolvedProvider = (provider == null || provider.isBlank())
+                ? settings.getDefaultProvider() : provider.trim().toLowerCase();
+
+        if (DEFAULT_PROVIDER.equals(resolvedProvider)) {
+            return new ModelEndpoint(resolvedProvider,
+                    StringUtils.hasText(model) ? model : settings.getDeepseekModel(),
+                    null,
+                    decryptDeepseekApiKey(settings));
+        }
+        if (PROVIDER_GLM.equals(resolvedProvider)) {
+            return new ModelEndpoint(resolvedProvider,
+                    StringUtils.hasText(model) ? model : settings.getGlmModel(),
+                    null,
+                    decryptGlmApiKey(settings));
+        }
+        // Custom provider: providerKey stored as-is (case-sensitive match by providerKey)
+        List<UserModel> userModels = userModelRepository.findByUserIdOrderBySortOrderAscIdAsc(userId);
+        Optional<UserModel> match = userModels.stream()
+                .filter(m -> m.getProviderKey().equals(provider))
+                .findFirst();
+        if (match.isEmpty()) {
+            // Fallback: match by model name
+            match = userModels.stream()
+                    .filter(m -> m.getModelName().equals(model))
+                    .findFirst();
+        }
+        if (match.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "未找到模型配置: " + provider);
+        }
+        UserModel um = match.get();
+        return new ModelEndpoint(um.getProviderKey(),
+                um.getModelName(),
+                um.getApiUrl(),
+                decryptCustomModelApiKey(um));
     }
 
     public String decryptDeepseekApiKey(SysUserSettings settings) {
@@ -86,6 +215,13 @@ public class UserSettingsService {
         return cryptoService.decrypt(settings.getGithubPatEncrypted());
     }
 
+    public String decryptCustomModelApiKey(UserModel model) {
+        if (!StringUtils.hasText(model.getApiKeyEncrypted())) {
+            return null;
+        }
+        return cryptoService.decrypt(model.getApiKeyEncrypted());
+    }
+
     public List<String> parseFilesystemRoots(SysUserSettings settings) {
         return readStringList(settings.getFilesystemRootsText(), DEFAULT_FILESYSTEM_ROOTS);
     }
@@ -94,8 +230,38 @@ public class UserSettingsService {
         return readStringList(settings.getDisabledSkillsJson(), List.of());
     }
 
+    public List<String> parseDeepseekModels(SysUserSettings settings) {
+        return readStringList(settings.getDeepseekModelsText(), DEFAULT_DEEPSEEK_MODELS);
+    }
+
+    public List<String> parseGlmModels(SysUserSettings settings) {
+        return readStringList(settings.getGlmModelsText(), DEFAULT_GLM_MODELS);
+    }
+
     private UserSettingsResponse toResponse(SysUserSettings settings) {
-        return UserSettingsResponse.from(settings, parseFilesystemRoots(settings), parseDisabledSkills(settings));
+        List<UserModelResponse> customModels = userModelRepository
+                .findByUserIdOrderBySortOrderAscIdAsc(settings.getUserId()).stream()
+                .map(UserModelResponse::from)
+                .toList();
+        return UserSettingsResponse.from(settings,
+                parseFilesystemRoots(settings),
+                parseDisabledSkills(settings),
+                parseDeepseekModels(settings),
+                parseGlmModels(settings),
+                customModels);
+    }
+
+    private void seedBuiltinCustomModels(Long userId) {
+        if (!userModelRepository.findByUserIdOrderBySortOrderAscIdAsc(userId).isEmpty()) {
+            return;
+        }
+        List<UserModel> builtins = List.of(
+                new UserModel(userId, "deepseek", "DeepSeek", "deepseek-chat", null, null, true, 1),
+                new UserModel(userId, "deepseek", "DeepSeek", "deepseek-reasoner", null, null, true, 2),
+                new UserModel(userId, "glm", "智谱 GLM", "glm-4.5-air", null, null, true, 3),
+                new UserModel(userId, "glm", "智谱 GLM", "glm-4-flash", null, null, true, 4)
+        );
+        userModelRepository.saveAllAndFlush(builtins);
     }
 
     private SysUserSettings defaultSettings(Long userId) {
@@ -118,7 +284,7 @@ public class UserSettingsService {
     private String normalizeProvider(String provider, String fallback) {
         String resolved = StringUtils.hasText(provider) ? provider.trim().toLowerCase() : fallback;
         if (!DEFAULT_PROVIDER.equals(resolved) && !PROVIDER_GLM.equals(resolved)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "当前仅支持 deepseek 或 glm 作为默认模型提供方");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "默认模型提供方仅支持 deepseek 或 glm");
         }
         return resolved;
     }
@@ -150,5 +316,9 @@ public class UserSettingsService {
         } catch (Exception ex) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "序列化设置失败", ex);
         }
+    }
+
+    /** Resolved model endpoint for the agent harness. */
+    public record ModelEndpoint(String providerKey, String modelName, String apiUrl, String apiKey) {
     }
 }

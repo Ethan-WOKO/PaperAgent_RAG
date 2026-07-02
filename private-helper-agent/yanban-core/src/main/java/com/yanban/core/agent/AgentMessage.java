@@ -35,6 +35,9 @@ public class AgentMessage {
     @Column(name = "tool_calls_json", columnDefinition = "LONGTEXT")
     private String toolCallsJson;
 
+    @Column(name = "tool_call_id", length = 128)
+    private String toolCallId;
+
     @Column(name = "paper_task_id")
     private Long paperTaskId;
 
@@ -46,11 +49,22 @@ public class AgentMessage {
     }
 
     public AgentMessage(Long sessionId, Long userId, String role, String content, String toolCallsJson, Long paperTaskId) {
+        this(sessionId, userId, role, content, toolCallsJson, null, paperTaskId);
+    }
+
+    public AgentMessage(Long sessionId,
+                        Long userId,
+                        String role,
+                        String content,
+                        String toolCallsJson,
+                        String toolCallId,
+                        Long paperTaskId) {
         this.sessionId = sessionId;
         this.userId = userId;
         this.role = role;
         this.content = content;
         this.toolCallsJson = toolCallsJson;
+        this.toolCallId = toolCallId;
         this.paperTaskId = paperTaskId;
     }
 
@@ -60,6 +74,7 @@ public class AgentMessage {
     public String getRole() { return role; }
     public String getContent() { return content; }
     public String getToolCallsJson() { return toolCallsJson; }
+    public String getToolCallId() { return toolCallId; }
     public Long getPaperTaskId() { return paperTaskId; }
     public Instant getCreatedAt() { return createdAt; }
 }

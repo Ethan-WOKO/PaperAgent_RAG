@@ -75,7 +75,10 @@ class KnowledgeControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].filename").value("notes.md"))
-                .andExpect(jsonPath("$[0].chunkText").value(org.hamcrest.Matchers.containsString("alpha")));
+                .andExpect(jsonPath("$[0].chunkText").value(org.hamcrest.Matchers.containsString("alpha")))
+                .andExpect(jsonPath("$[0].citationId").exists())
+                .andExpect(jsonPath("$[0].rerankScore").exists())
+                .andExpect(jsonPath("$[0].rerankReason").exists());
     }
 
     @Test
@@ -121,6 +124,35 @@ class KnowledgeControllerIntegrationTest {
                 .andExpect(jsonPath("$.length()").value(1))
                 .andExpect(jsonPath("$[0].filename").value("mine.md"))
                 .andExpect(jsonPath("$[0].status").value("READY"));
+    }
+
+    @Test
+    void previewDocumentReturnsParsedTextForOwner() throws Exception {
+        String token = registerAndGetToken("kb_preview_owner");
+        Long documentId = uploadAndReturnId(token, false, "preview.md", "preview alpha content\nsecond line");
+
+        mockMvc.perform(get("/api/v1/kb/documents/{documentId}/preview", documentId)
+                        .queryParam("maxChars", "2000")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(documentId))
+                .andExpect(jsonPath("$.filename").value("preview.md"))
+                .andExpect(jsonPath("$.status").value("READY"))
+                .andExpect(jsonPath("$.totalChunks").value(1))
+                .andExpect(jsonPath("$.previewChunks").value(1))
+                .andExpect(jsonPath("$.truncated").value(false))
+                .andExpect(jsonPath("$.content").value(org.hamcrest.Matchers.containsString("preview alpha content")));
+    }
+
+    @Test
+    void privateDocumentPreviewIsForbiddenForAnotherUser() throws Exception {
+        String tokenA = registerAndGetToken("kb_preview_private_owner");
+        String tokenB = registerAndGetToken("kb_preview_private_other");
+        Long documentId = uploadAndReturnId(tokenA, false, "private-preview.md", "private preview content");
+
+        mockMvc.perform(get("/api/v1/kb/documents/{documentId}/preview", documentId)
+                        .header("Authorization", "Bearer " + tokenB))
+                .andExpect(status().isNotFound());
     }
 
     @Test
