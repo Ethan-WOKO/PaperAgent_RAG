@@ -1,7 +1,6 @@
 package com.yanban.api.settings;
 
 import com.yanban.api.security.JwtUser;
-import com.yanban.core.model.ChatChunk;
 import com.yanban.core.model.ChatMessage;
 import com.yanban.core.model.ChatModelProvider;
 import com.yanban.core.model.ChatRequest;
@@ -60,9 +59,6 @@ public class UserModelController {
 
     @PostMapping("/{id}/test")
     public Map<String, Object> test(@AuthenticationPrincipal JwtUser currentUser, @PathVariable Long id) {
-        UserSettingsService.ModelEndpoint endpoint = userSettingsService
-                .resolveModelEndpoint(currentUser.id(), "custom-placeholder", null);
-        // Resolve the actual model by id
         List<UserModelResponse> models = userSettingsService.listCustomModels(currentUser.id());
         UserModelResponse model = models.stream()
                 .filter(m -> m.id().equals(id))

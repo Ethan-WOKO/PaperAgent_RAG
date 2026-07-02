@@ -11,6 +11,7 @@ import com.yanban.api.security.JwtUser;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.springframework.web.socket.TextMessage;
@@ -24,8 +25,13 @@ class ChatWebSocketHandlerTest {
         AgentService agentService = Mockito.mock(AgentService.class);
         ChatWebSocketHandler handler = new ChatWebSocketHandler(objectMapper, agentService);
 
-        when(agentService.sendMessage(Mockito.eq(1001L), Mockito.eq(99L), any()))
-                .thenReturn(new SendMessageResponse(true, "你好", 1, null, null, List.of()));
+        when(agentService.sendMessageStreaming(Mockito.eq(1001L), Mockito.eq(99L), any(), Mockito.<Consumer<String>>any()))
+                .thenAnswer(invocation -> {
+                    Consumer<String> tokenConsumer = invocation.getArgument(3);
+                    tokenConsumer.accept("你");
+                    tokenConsumer.accept("好");
+                    return new SendMessageResponse(true, "你好", 1, null, null, List.of());
+                });
 
         WebSocketSession wsSession = Mockito.mock(WebSocketSession.class);
         HashMap<String, Object> attributes = new HashMap<>();
@@ -40,8 +46,9 @@ class ChatWebSocketHandlerTest {
 
         handler.handleTextMessage(wsSession, new TextMessage("{\"sessionId\":99,\"content\":\"你好\"}"));
 
-        assertThat(outbound).hasSize(2);
-        assertThat(outbound.get(0)).contains("\"type\":\"chunk\"").contains("\"content\":\"你好\"");
-        assertThat(outbound.get(1)).contains("\"type\":\"done\"").contains("\"finishReason\":\"harness\"");
+        assertThat(outbound).hasSize(3);
+        assertThat(outbound.get(0)).contains("\"type\":\"chunk\"").contains("\"content\":\"你\"");
+        assertThat(outbound.get(1)).contains("\"type\":\"chunk\"").contains("\"content\":\"好\"");
+        assertThat(outbound.get(2)).contains("\"type\":\"done\"").contains("\"finishReason\":\"harness\"");
     }
 }

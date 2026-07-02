@@ -40,15 +40,16 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         }
 
         try {
-            SendMessageResponse response = agentService.sendMessage(
+            SendMessageResponse response = agentService.sendMessageStreaming(
                     currentUser.id(),
                     request.sessionId(),
-                    new SendMessageRequest(request.content(), request.ragDisabled(), request.skillId())
+                    new SendMessageRequest(request.content(), request.ragDisabled(), request.skillId()),
+                    token -> {
+                        if (token != null && !token.isEmpty()) {
+                            sendSafe(session, WsChatEvent.chunk(request.sessionId(), token));
+                        }
+                    }
             );
-
-            if (StringUtils.hasText(response.assistantContent())) {
-                sendSafe(session, WsChatEvent.chunk(request.sessionId(), response.assistantContent()));
-            }
 
             if (!response.success()) {
                 sendSafe(session, WsChatEvent.error(

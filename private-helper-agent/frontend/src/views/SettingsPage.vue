@@ -32,13 +32,16 @@
                     <NTag :type="deepseekConfigured ? 'success' : 'warning'" round>
                       {{ deepseekConfigured ? 'API key configured' : 'API key missing' }}
                     </NTag>
+                    <NButton size="small" secondary :loading="refreshingProvider === 'deepseek'" @click="handleRefreshModels('deepseek')">
+                      Refresh models
+                    </NButton>
                   </div>
                   <NGrid :cols="2" :x-gap="12" responsive="screen" item-responsive>
                     <NFormItemGi span="2 m:1" label="Model name">
                       <NSelect v-model:value="form.deepseekModel" filterable tag :options="deepseekModelOptions" />
                     </NFormItemGi>
                     <NFormItemGi span="2 m:1" label="Available models">
-                      <NDynamicTags v-model:value="form.deepseekModels" :max="20" />
+                      <NDynamicTags v-model:value="form.deepseekModels" :max="50" />
                     </NFormItemGi>
                     <NFormItemGi span="2 m:1" label="API Key">
                       <NInput
@@ -63,13 +66,16 @@
                     <NTag :type="glmConfigured ? 'success' : 'warning'" round>
                       {{ glmConfigured ? 'API key configured' : 'API key missing' }}
                     </NTag>
+                    <NButton size="small" secondary :loading="refreshingProvider === 'glm'" @click="handleRefreshModels('glm')">
+                      Sync catalog
+                    </NButton>
                   </div>
                   <NGrid :cols="2" :x-gap="12" responsive="screen" item-responsive>
                     <NFormItemGi span="2 m:1" label="Model name">
                       <NSelect v-model:value="form.glmModel" filterable tag :options="glmModelOptions" />
                     </NFormItemGi>
                     <NFormItemGi span="2 m:1" label="Available models">
-                      <NDynamicTags v-model:value="form.glmModels" :max="20" />
+                      <NDynamicTags v-model:value="form.glmModels" :max="50" />
                     </NFormItemGi>
                     <NFormItemGi span="2 m:1" label="API Key">
                       <NInput
@@ -242,7 +248,7 @@
             <NInput v-model:value="modelForm.apiUrl" placeholder="https://api.deepseek.com/v1/chat/completions" />
           </NFormItem>
           <NFormItem label="模型 ID">
-            <NInput v-model:value="modelForm.modelName" placeholder="例如：deepseek-chat" />
+            <NInput v-model:value="modelForm.modelName" placeholder="例如：deepseek-v4-flash" />
           </NFormItem>
           <NFormItem :label="editingModelId ? 'API Key（留空保持不变）' : 'API Key'">
             <NInput v-model:value="modelForm.apiKey" type="password" show-password-on="click" placeholder="sk-..." />
@@ -281,8 +287,26 @@ import {
 import { computed, onMounted, reactive, ref } from 'vue';
 import AppLayout from '@/components/AppLayout.vue';
 import { listSkills, type SkillListItemResponse } from '@/api/skills';
-import { getSettings, updateSettings, createModel, updateModel, deleteModel, testModel, type UserModelResponse } from '@/api/settings';
+import { getSettings, updateSettings, refreshProviderModels, createModel, updateModel, deleteModel, testModel, type UserModelResponse, type UserSettingsResponse } from '@/api/settings';
 import { ui } from '@/ui';
+
+const DEFAULT_DEEPSEEK_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner'];
+const DEFAULT_GLM_MODELS = [
+  'glm-5.2',
+  'glm-5.1',
+  'glm-5',
+  'glm-5-turbo',
+  'glm-4.7',
+  'glm-4.7-flashx',
+  'glm-4.6',
+  'glm-4.5-air',
+  'glm-4.5-airx',
+  'glm-4-long',
+  'glm-4.7-flash',
+  'glm-4.5-flash',
+  'glm-4-flash-250414',
+  'glm-4-flash',
+];
 
 const providerOptions = [
   { label: 'DeepSeek', value: 'deepseek' },
@@ -302,10 +326,10 @@ const form = reactive({
   deepseekApiKey: '',
   glmApiKey: '',
   githubPat: '',
-  deepseekModel: 'deepseek-chat',
-  glmModel: 'glm-4.5-air',
-  deepseekModels: ['deepseek-chat', 'deepseek-reasoner'] as string[],
-  glmModels: ['glm-4.5-air', 'glm-4-flash'] as string[],
+  deepseekModel: 'deepseek-v4-flash',
+  glmModel: 'glm-5.2',
+  deepseekModels: [...DEFAULT_DEEPSEEK_MODELS] as string[],
+  glmModels: [...DEFAULT_GLM_MODELS] as string[],
   deepseekTemperature: 0.7,
   maxSteps: 20,
   ragDefaultEnabled: true,
@@ -317,6 +341,7 @@ const modelModalVisible = ref(false);
 const editingModelId = ref<number | null>(null);
 const modelForm = reactive({ label: '', apiUrl: '', apiKey: '', modelName: '' });
 const testingModelId = ref<number | null>(null);
+const refreshingProvider = ref<string | null>(null);
 
 const disabledSkillsSet = computed(() => new Set(disabledSkills.value));
 const updatedAtText = computed(() => updatedAt.value ? new Date(updatedAt.value).toLocaleString('zh-CN') : 'Never');
@@ -331,27 +356,31 @@ onMounted(async () => {
 async function loadSettings() {
   try {
     const { data } = await getSettings();
-    form.defaultProvider = data.defaultProvider;
-    form.deepseekApiKey = '';
-    form.glmApiKey = '';
-    form.githubPat = '';
-    form.deepseekModel = data.deepseekModel;
-    form.glmModel = data.glmModel;
-    form.deepseekModels = data.deepseekModels?.length ? data.deepseekModels : ['deepseek-chat', 'deepseek-reasoner'];
-    form.glmModels = data.glmModels?.length ? data.glmModels : ['glm-4.5-air', 'glm-4-flash'];
-    form.deepseekTemperature = data.deepseekTemperature;
-    form.maxSteps = data.maxSteps;
-    form.ragDefaultEnabled = data.ragDefaultEnabled;
-    filesystemRootsText.value = (data.filesystemRoots || []).join('\n');
-    disabledSkills.value = [...(data.disabledSkills || [])];
-    deepseekConfigured.value = data.deepseekApiKeyConfigured;
-    glmConfigured.value = data.glmApiKeyConfigured;
-    githubConfigured.value = data.githubPatConfigured;
-    updatedAt.value = data.updatedAt;
-    customModels.value = data.customModels || [];
+    applySettingsResponse(data);
   } catch (error: any) {
     ui.message.error(error.response?.data?.message || 'Failed to load settings.');
   }
+}
+
+function applySettingsResponse(data: UserSettingsResponse) {
+  form.defaultProvider = data.defaultProvider;
+  form.deepseekApiKey = '';
+  form.glmApiKey = '';
+  form.githubPat = '';
+  form.deepseekModel = data.deepseekModel;
+  form.glmModel = data.glmModel;
+  form.deepseekModels = data.deepseekModels?.length ? data.deepseekModels : [...DEFAULT_DEEPSEEK_MODELS];
+  form.glmModels = data.glmModels?.length ? data.glmModels : [...DEFAULT_GLM_MODELS];
+  form.deepseekTemperature = data.deepseekTemperature;
+  form.maxSteps = data.maxSteps;
+  form.ragDefaultEnabled = data.ragDefaultEnabled;
+  filesystemRootsText.value = (data.filesystemRoots || []).join('\n');
+  disabledSkills.value = [...(data.disabledSkills || [])];
+  deepseekConfigured.value = data.deepseekApiKeyConfigured;
+  glmConfigured.value = data.glmApiKeyConfigured;
+  githubConfigured.value = data.githubPatConfigured;
+  updatedAt.value = data.updatedAt;
+  customModels.value = data.customModels || [];
 }
 
 async function loadSkills() {
@@ -389,20 +418,25 @@ async function handleSave() {
       filesystemRoots: splitLines(filesystemRootsText.value),
       disabledSkills: disabledSkills.value,
     });
-    form.deepseekApiKey = '';
-    form.glmApiKey = '';
-    form.githubPat = '';
-    deepseekConfigured.value = data.deepseekApiKeyConfigured;
-    glmConfigured.value = data.glmApiKeyConfigured;
-    githubConfigured.value = data.githubPatConfigured;
-    updatedAt.value = data.updatedAt;
-    filesystemRootsText.value = (data.filesystemRoots || []).join('\n');
-    disabledSkills.value = [...(data.disabledSkills || [])];
+    applySettingsResponse(data);
     ui.message.success('Settings saved.');
   } catch (error: any) {
     ui.message.error(error.response?.data?.message || 'Failed to save settings.');
   } finally {
     saving.value = false;
+  }
+}
+
+async function handleRefreshModels(provider: 'deepseek' | 'glm') {
+  refreshingProvider.value = provider;
+  try {
+    const { data } = await refreshProviderModels(provider);
+    applySettingsResponse(data);
+    ui.message.success(provider === 'deepseek' ? 'DeepSeek models refreshed.' : 'GLM catalog synced.');
+  } catch (error: any) {
+    ui.message.error(error.response?.data?.message || `Failed to refresh ${provider} models.`);
+  } finally {
+    refreshingProvider.value = null;
   }
 }
 

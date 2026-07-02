@@ -335,6 +335,8 @@ const CHAT_SIDEBAR_COLLAPSED_KEY = 'yanban.chat.sessionsCollapsed';
 const AGENT_SIDEBAR_COLLAPSED_KEY = 'yanban.chat.agentCollapsed';
 const chatSidebarCollapsed = ref(readStoredBoolean(CHAT_SIDEBAR_COLLAPSED_KEY, false));
 const agentSidebarCollapsed = ref(readStoredBoolean(AGENT_SIDEBAR_COLLAPSED_KEY, false));
+const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-flash';
+const DEFAULT_GLM_MODEL = 'glm-5.2';
 
 const sessionMenuOptions = [
   { label: '重命名', key: 'rename' },
@@ -349,13 +351,13 @@ const modelOptions = computed(() => {
   const options: { label: string; value: string }[] = [];
   const deepseekModels = settings.value?.deepseekModels?.length
     ? settings.value.deepseekModels
-    : ['deepseek-chat'];
+    : [DEFAULT_DEEPSEEK_MODEL];
   for (const m of deepseekModels) {
     options.push({ label: `DeepSeek · ${m}`, value: toModelKey('deepseek', m) });
   }
   const glmModels = settings.value?.glmModels?.length
     ? settings.value.glmModels
-    : ['glm-4.5-air'];
+    : [DEFAULT_GLM_MODEL];
   for (const m of glmModels) {
     options.push({ label: `GLM · ${m}`, value: toModelKey('glm', m) });
   }
@@ -413,7 +415,7 @@ async function loadSettings() {
   } catch (error: any) {
     ui.message.error(error.response?.data?.message || '加载模型设置失败');
     if (!selectedModelKey.value) {
-      selectedModelKey.value = toModelKey('deepseek', 'deepseek-chat');
+      selectedModelKey.value = toModelKey('deepseek', DEFAULT_DEEPSEEK_MODEL);
     }
   }
 }
@@ -970,26 +972,26 @@ function extractNavigationUrl(content: string) {
 }
 
 function toModelKey(provider: string, model: string) {
-  return `${provider || 'deepseek'}::${model || 'deepseek-chat'}`;
+  return `${provider || 'deepseek'}::${model || DEFAULT_DEEPSEEK_MODEL}`;
 }
 
 function parseModelKey(key: string) {
   const [provider, ...modelParts] = (key || '').split('::');
   const fallback = defaultModelKeyFromSettings(settings.value);
   if (!provider || modelParts.length === 0) {
-    return parseModelKey(fallback === key ? 'deepseek::deepseek-chat' : fallback);
+    return parseModelKey(fallback === key ? toModelKey('deepseek', DEFAULT_DEEPSEEK_MODEL) : fallback);
   }
   return {
     provider,
-    model: modelParts.join('::') || 'deepseek-chat',
+    model: modelParts.join('::') || DEFAULT_DEEPSEEK_MODEL,
   };
 }
 
 function defaultModelKeyFromSettings(currentSettings: UserSettingsResponse | null) {
   const provider = currentSettings?.defaultProvider || 'deepseek';
   const model = provider === 'glm'
-    ? (currentSettings?.glmModel || 'glm-4.5-air')
-    : (currentSettings?.deepseekModel || 'deepseek-chat');
+    ? (currentSettings?.glmModel || DEFAULT_GLM_MODEL)
+    : (currentSettings?.deepseekModel || DEFAULT_DEEPSEEK_MODEL);
   return toModelKey(provider, model);
 }
 

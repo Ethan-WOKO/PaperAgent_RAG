@@ -4,6 +4,8 @@ import com.yanban.api.security.JwtUser;
 import jakarta.validation.Valid;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -28,5 +30,11 @@ public class UserSettingsController {
     public UserSettingsResponse update(@AuthenticationPrincipal JwtUser currentUser,
                                        @Valid @RequestBody UserSettingsRequest request) {
         return userSettingsService.update(currentUser.id(), request);
+    }
+
+    @PostMapping("/providers/{provider}/models/refresh")
+    public UserSettingsResponse refreshProviderModels(@AuthenticationPrincipal JwtUser currentUser,
+                                                      @PathVariable String provider) {
+        return userSettingsService.refreshProviderModels(currentUser.id(), provider);
     }
 }

@@ -62,6 +62,10 @@ export function updateSettings(payload: UserSettingsRequest) {
   return http.put<UserSettingsResponse>('/settings', payload);
 }
 
+export function refreshProviderModels(provider: string) {
+  return http.post<UserSettingsResponse>(`/settings/providers/${provider}/models/refresh`, {});
+}
+
 export function listModels() {
   return http.get<UserModelResponse[]>('/models');
 }

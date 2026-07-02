@@ -226,6 +226,7 @@ public class GlmModelProvider implements ChatModelProvider {
                     chunks.add(ChatChunk.token(content));
                 }
             }
+            chunks.addAll(parseToolCallDeltas(delta.path("tool_calls")));
             if (choice.hasNonNull("finish_reason")) {
                 chunks.add(ChatChunk.done(choice.path("finish_reason").asText()));
             }
@@ -233,6 +234,33 @@ public class GlmModelProvider implements ChatModelProvider {
         } catch (Exception ex) {
             throw new ModelProviderException("Failed to parse GLM SSE chunk", ex);
         }
+    }
+
+    private List<ChatChunk> parseToolCallDeltas(JsonNode toolCallsNode) {
+        if (toolCallsNode == null || !toolCallsNode.isArray()) {
+            return List.of();
+        }
+        List<ChatChunk> chunks = new ArrayList<>();
+        for (JsonNode toolCallNode : toolCallsNode) {
+            int index = toolCallNode.path("index").asInt(0);
+            JsonNode functionNode = toolCallNode.path("function");
+            chunks.add(ChatChunk.toolCallDelta(new ChatChunk.ToolCallDelta(
+                    index,
+                    textOrNull(toolCallNode.path("id")),
+                    textOrNull(toolCallNode.path("type")),
+                    textOrNull(functionNode.path("name")),
+                    textOrNull(functionNode.path("arguments"))
+            )));
+        }
+        return chunks;
+    }
+
+    private String textOrNull(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        String value = node.asText();
+        return value == null || value.isEmpty() ? null : value;
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)

@@ -114,9 +114,12 @@ class AgentControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.steps").value(0))
-                .andExpect(jsonPath("$.assistantContent").value(org.hamcrest.Matchers.containsString("provider=glm")))
-                .andExpect(jsonPath("$.assistantContent").value(org.hamcrest.Matchers.containsString("model=glm-4.5-air")))
-                .andExpect(jsonPath("$.assistantContent").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("我是Claude"))))
+                .andExpect(jsonPath("$.assistantContent").value(org.hamcrest.Matchers.containsString("GLM")))
+                .andExpect(jsonPath("$.assistantContent").value(org.hamcrest.Matchers.containsString("glm-4.5-air")))
+                .andExpect(jsonPath("$.assistantContent").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("provider="))))
+                .andExpect(jsonPath("$.assistantContent").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("model="))))
+                .andExpect(jsonPath("$.assistantContent").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("Runtime identity guard"))))
+                .andExpect(jsonPath("$.assistantContent").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("backend"))))
                 .andExpect(jsonPath("$.messages.length()").value(2));
 
         verify(chatModelProvider, times(0)).chat(any());
@@ -144,7 +147,8 @@ class AgentControllerIntegrationTest {
                 .anySatisfy(message -> {
                     assertThat(message.role()).isEqualTo("system");
                     assertThat(message.content()).contains("Runtime identity guard");
-                    assertThat(message.content()).contains("provider is \"deepseek\"");
+                    assertThat(message.content()).contains("user-visible model identity");
+                    assertThat(message.content()).contains("DeepSeek");
                 });
 
         mockMvc.perform(get("/api/v1/agent/sessions/{id}/messages", sessionId)

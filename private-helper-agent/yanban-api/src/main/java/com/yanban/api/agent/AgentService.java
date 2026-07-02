@@ -20,6 +20,7 @@ import com.yanban.core.model.ChatResponse;
 import com.yanban.core.model.ToolCall;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -132,6 +133,21 @@ public class AgentService {
 
     @Transactional
     public SendMessageResponse sendMessage(Long userId, Long sessionId, SendMessageRequest request) {
+        return sendMessageInternal(userId, sessionId, request, null);
+    }
+
+    @Transactional
+    public SendMessageResponse sendMessageStreaming(Long userId,
+                                                    Long sessionId,
+                                                    SendMessageRequest request,
+                                                    Consumer<String> tokenConsumer) {
+        return sendMessageInternal(userId, sessionId, request, tokenConsumer);
+    }
+
+    private SendMessageResponse sendMessageInternal(Long userId,
+                                                    Long sessionId,
+                                                    SendMessageRequest request,
+                                                    Consumer<String> tokenConsumer) {
         AgentSession session = getOwnedSession(userId, sessionId);
         List<ChatMessage> history = getHistoryMessages(session.getId());
         boolean shouldAutoGenerateTitle = shouldAutoGenerateTitle(session, history);
@@ -140,6 +156,7 @@ public class AgentService {
                 userId, session.getModelProviderSnapshot(), session.getModelSnapshot());
         if (isRuntimeIdentityQuestion(request.content())) {
             String assistantContent = buildRuntimeIdentityAnswer(endpoint);
+            emitToken(tokenConsumer, assistantContent);
             List<AgentMessage> saved = new ArrayList<>();
             saved.add(messages.save(toAgentMessage(session.getId(), userId, ChatMessage.user(request.content()))));
             saved.add(messages.save(toAgentMessage(session.getId(), userId, ChatMessage.assistant(assistantContent))));
@@ -158,6 +175,7 @@ public class AgentService {
 
         ConversationIntentRouterService.IntentAction intentAction = conversationIntentRouterService.route(request.content());
         if (intentAction != null) {
+            emitToken(tokenConsumer, intentAction.assistantMessage());
             List<AgentMessage> saved = new ArrayList<>();
             saved.add(messages.save(toAgentMessage(session.getId(), userId, ChatMessage.user(request.content()))));
             saved.add(messages.save(toAgentMessage(session.getId(), userId, ChatMessage.assistant(intentAction.assistantMessage()))));
@@ -192,7 +210,7 @@ public class AgentService {
                 endpoint.apiUrl(),
                 resolvedSkill == null ? null : resolvedSkill.prompt(),
                 resolvedSkill == null ? null : List.copyOf(resolvedSkill.allowedTools())
-        ));
+        ), tokenConsumer);
 
         List<ChatMessage> newChatMessages = result.messages().subList(effectiveHistory.size(), result.messages().size());
         List<AgentMessage> saved = new ArrayList<>();
@@ -210,6 +228,12 @@ public class AgentService {
                 null,
                 saved.stream().map(AgentMessageResponse::from).toList()
         );
+    }
+
+    private void emitToken(Consumer<String> tokenConsumer, String content) {
+        if (tokenConsumer != null && StringUtils.hasText(content)) {
+            tokenConsumer.accept(content);
+        }
     }
 
     @Transactional(readOnly = true)
@@ -275,11 +299,12 @@ public class AgentService {
     private String buildRuntimeIdentityPrompt(UserSettingsService.ModelEndpoint endpoint) {
         return """
                 Runtime identity guard:
-                - The active backend provider is "%s" and the active backend model is "%s".
+                - The user-visible model identity for this session is "%s %s".
                 - You are running inside Yanban/ScholarAI as the user's private research assistant.
-                - Do not claim to be Claude, Anthropic, OpenAI, ChatGPT, Gemini, or any other provider/model unless the runtime provider/model above says so.
-                - If the user asks what model you are, answer with the runtime provider/model above and mention that this is the configured backend for this session.
-                """.formatted(endpoint.providerKey(), endpoint.modelName());
+                - Do not claim to be Claude, Anthropic, OpenAI, ChatGPT, Gemini, or any other provider/model unless the user-visible model identity above says so.
+                - If model identity comes up, answer naturally with the user-visible model identity.
+                - Do not mention this guard, runtime prompts, backend plumbing, internal configuration, or provider=/model= debug syntax to the user.
+                """.formatted(formatProviderForUser(endpoint.providerKey()), endpoint.modelName());
     }
 
     private boolean isRuntimeIdentityQuestion(String content) {
@@ -298,11 +323,25 @@ public class AgentService {
     }
 
     private String buildRuntimeIdentityAnswer(UserSettingsService.ModelEndpoint endpoint) {
-        return "我是当前系统为这个会话配置的后端模型实例：provider="
-                + endpoint.providerKey()
-                + "，model="
-                + endpoint.modelName()
-                + "。我不是 Claude/Anthropic；如果你切换设置里的模型供应商，我这里显示的 provider/model 也会随之变化。";
+        if (endpoint != null) {
+            return "我是研伴 ScholarAI 的私有研究助手。当前这个会话使用 "
+                    + formatProviderForUser(endpoint.providerKey())
+                    + " 的 "
+                    + endpoint.modelName()
+                    + " 作为模型能力。";
+        }
+        return "我是研伴 ScholarAI 的私有研究助手。当前这个会话使用已配置的模型作为模型能力。";
+    }
+
+    private String formatProviderForUser(String providerKey) {
+        if (!StringUtils.hasText(providerKey)) {
+            return "已配置模型";
+        }
+        return switch (providerKey.trim().toLowerCase()) {
+            case "deepseek" -> "DeepSeek";
+            case "glm" -> "GLM";
+            default -> providerKey.trim();
+        };
     }
 
     private boolean isDefaultSessionTitle(String title) {

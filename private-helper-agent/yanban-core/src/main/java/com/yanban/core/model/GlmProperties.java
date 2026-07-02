@@ -7,7 +7,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class GlmProperties {
     private String apiUrl = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
     private String apiKey;
-    private String model = "glm-4.5-air";
+    private String model = "glm-5.2";
     private Double temperature = 0.7;
     private Integer maxTokens = 4096;
     private Duration timeout = Duration.ofSeconds(60);

@@ -17,27 +17,50 @@ public class UserSettingsService {
 
     public static final String DEFAULT_PROVIDER = "deepseek";
     public static final String PROVIDER_GLM = "glm";
-    public static final String DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
-    public static final String DEFAULT_GLM_MODEL = "glm-4.5-air";
+    public static final String DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash";
+    public static final String DEFAULT_GLM_MODEL = "glm-5.2";
     public static final BigDecimal DEFAULT_TEMPERATURE = new BigDecimal("0.70");
     public static final int DEFAULT_MAX_STEPS = 20;
     public static final boolean DEFAULT_RAG_ENABLED = true;
     public static final List<String> DEFAULT_FILESYSTEM_ROOTS = List.of("workspace");
-    public static final List<String> DEFAULT_DEEPSEEK_MODELS = List.of("deepseek-chat", "deepseek-reasoner");
-    public static final List<String> DEFAULT_GLM_MODELS = List.of("glm-4.5-air", "glm-4-flash");
+    public static final List<String> DEFAULT_DEEPSEEK_MODELS = List.of(
+            "deepseek-v4-flash",
+            "deepseek-v4-pro",
+            "deepseek-chat",
+            "deepseek-reasoner"
+    );
+    public static final List<String> DEFAULT_GLM_MODELS = List.of(
+            "glm-5.2",
+            "glm-5.1",
+            "glm-5",
+            "glm-5-turbo",
+            "glm-4.7",
+            "glm-4.7-flashx",
+            "glm-4.6",
+            "glm-4.5-air",
+            "glm-4.5-airx",
+            "glm-4-long",
+            "glm-4.7-flash",
+            "glm-4.5-flash",
+            "glm-4-flash-250414",
+            "glm-4-flash"
+    );
 
     private final SysUserSettingsRepository repository;
     private final UserModelRepository userModelRepository;
     private final SettingsCryptoService cryptoService;
+    private final ModelDiscoveryService modelDiscoveryService;
     private final ObjectMapper objectMapper;
 
     public UserSettingsService(SysUserSettingsRepository repository,
                                UserModelRepository userModelRepository,
                                SettingsCryptoService cryptoService,
+                               ModelDiscoveryService modelDiscoveryService,
                                ObjectMapper objectMapper) {
         this.repository = repository;
         this.userModelRepository = userModelRepository;
         this.cryptoService = cryptoService;
+        this.modelDiscoveryService = modelDiscoveryService;
         this.objectMapper = objectMapper;
     }
 
@@ -67,6 +90,52 @@ public class UserSettingsService {
                 encryptedGithubPat, filesystemRootsText, disabledSkillsJson, temperature, maxSteps, ragDefaultEnabled,
                 deepseekModelsText, glmModelsText);
         return toResponse(repository.saveAndFlush(settings));
+    }
+
+    @Transactional
+    public UserSettingsResponse refreshProviderModels(Long userId, String provider) {
+        SysUserSettings settings = getOrCreate(userId);
+        String resolvedProvider = normalizeProvider(provider, settings.getDefaultProvider());
+        if (DEFAULT_PROVIDER.equals(resolvedProvider)) {
+            List<String> models = modelDiscoveryService.discoverDeepSeekModels(decryptDeepseekApiKey(settings));
+            String selectedModel = models.contains(settings.getDeepseekModel())
+                    ? settings.getDeepseekModel()
+                    : models.get(0);
+            settings.update(settings.getDefaultProvider(),
+                    settings.getDeepseekApiKeyEncrypted(),
+                    settings.getGlmApiKeyEncrypted(),
+                    selectedModel,
+                    settings.getGlmModel(),
+                    settings.getGithubPatEncrypted(),
+                    settings.getFilesystemRootsText(),
+                    settings.getDisabledSkillsJson(),
+                    settings.getDeepseekTemperature(),
+                    settings.getMaxSteps(),
+                    settings.getRagDefaultEnabled(),
+                    writeJson(models),
+                    settings.getGlmModelsText());
+            return toResponse(repository.saveAndFlush(settings));
+        }
+        if (PROVIDER_GLM.equals(resolvedProvider)) {
+            String selectedModel = DEFAULT_GLM_MODELS.contains(settings.getGlmModel())
+                    ? settings.getGlmModel()
+                    : DEFAULT_GLM_MODELS.get(0);
+            settings.update(settings.getDefaultProvider(),
+                    settings.getDeepseekApiKeyEncrypted(),
+                    settings.getGlmApiKeyEncrypted(),
+                    settings.getDeepseekModel(),
+                    selectedModel,
+                    settings.getGithubPatEncrypted(),
+                    settings.getFilesystemRootsText(),
+                    settings.getDisabledSkillsJson(),
+                    settings.getDeepseekTemperature(),
+                    settings.getMaxSteps(),
+                    settings.getRagDefaultEnabled(),
+                    settings.getDeepseekModelsText(),
+                    writeJson(DEFAULT_GLM_MODELS));
+            return toResponse(repository.saveAndFlush(settings));
+        }
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported provider: " + provider);
     }
 
     @Transactional
@@ -256,10 +325,16 @@ public class UserSettingsService {
             return;
         }
         List<UserModel> builtins = List.of(
-                new UserModel(userId, "deepseek", "DeepSeek", "deepseek-chat", null, null, true, 1),
-                new UserModel(userId, "deepseek", "DeepSeek", "deepseek-reasoner", null, null, true, 2),
-                new UserModel(userId, "glm", "智谱 GLM", "glm-4.5-air", null, null, true, 3),
-                new UserModel(userId, "glm", "智谱 GLM", "glm-4-flash", null, null, true, 4)
+                new UserModel(userId, "deepseek", "DeepSeek", "deepseek-v4-flash", null, null, true, 1),
+                new UserModel(userId, "deepseek", "DeepSeek", "deepseek-v4-pro", null, null, true, 2),
+                new UserModel(userId, "deepseek", "DeepSeek", "deepseek-chat", null, null, true, 3),
+                new UserModel(userId, "deepseek", "DeepSeek", "deepseek-reasoner", null, null, true, 4),
+                new UserModel(userId, "glm", "Zhipu GLM", "glm-5.2", null, null, true, 5),
+                new UserModel(userId, "glm", "Zhipu GLM", "glm-5.1", null, null, true, 6),
+                new UserModel(userId, "glm", "Zhipu GLM", "glm-5", null, null, true, 7),
+                new UserModel(userId, "glm", "Zhipu GLM", "glm-4.7", null, null, true, 8),
+                new UserModel(userId, "glm", "Zhipu GLM", "glm-4.6", null, null, true, 9),
+                new UserModel(userId, "glm", "Zhipu GLM", "glm-4.5-air", null, null, true, 10)
         );
         userModelRepository.saveAllAndFlush(builtins);
     }

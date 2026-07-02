@@ -87,6 +87,58 @@ class HarnessEngineTest {
     }
 
     @Test
+    void streamsPlainTextTokensToConsumer() {
+        StreamingMockProvider provider = new StreamingMockProvider(List.of(List.of(
+                ChatChunk.token("he"),
+                ChatChunk.token("llo"),
+                ChatChunk.done("stop")
+        )));
+        HarnessEngine engine = new HarnessEngine(provider, new ToolRegistry().register(new EchoToolExecutor(objectMapper)), objectMapper);
+        List<String> streamed = new ArrayList<>();
+
+        HarnessResult result = engine.run(
+                new HarnessRequest(List.of(), 1001L, "hello", "mock", "mock-model", null, null, 20, true, null, null, null),
+                streamed::add
+        );
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.assistantContent()).isEqualTo("hello");
+        assertThat(streamed).containsExactly("he", "llo");
+        assertThat(provider.chatCalls).isZero();
+    }
+
+    @Test
+    void reconstructsStreamingToolCallDeltasBeforeFinalAnswer() {
+        StreamingMockProvider provider = new StreamingMockProvider(List.of(
+                List.of(
+                        ChatChunk.toolCallDelta(new ChatChunk.ToolCallDelta(0, "call-1", "function", "echo", null)),
+                        ChatChunk.toolCallDelta(new ChatChunk.ToolCallDelta(0, null, null, null, "{\"message\":\"")),
+                        ChatChunk.toolCallDelta(new ChatChunk.ToolCallDelta(0, null, null, null, "hello\"}")),
+                        ChatChunk.done("tool_calls")
+                ),
+                List.of(
+                        ChatChunk.token("done"),
+                        ChatChunk.done("stop")
+                )
+        ));
+        HarnessEngine engine = new HarnessEngine(provider, new ToolRegistry().register(new EchoToolExecutor(objectMapper)), objectMapper);
+        List<String> streamed = new ArrayList<>();
+
+        HarnessResult result = engine.run(
+                new HarnessRequest(List.of(), 1001L, "call echo", "mock", "mock-model", null, null, 20, true, null, null, null),
+                streamed::add
+        );
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.assistantContent()).isEqualTo("done");
+        assertThat(streamed).containsExactly("done");
+        assertThat(provider.requests).hasSize(2);
+        assertThat(result.messages()).extracting(ChatMessage::role)
+                .containsExactly("user", "assistant", "tool", "assistant");
+        assertThat(result.messages().get(2).content()).contains("hello");
+    }
+
+    @Test
     void usesKnowledgeContextWhenRagEnabled() {
         MockProvider provider = new MockProvider(List.of(
                 new ChatResponse(ChatMessage.assistant("参考知识库回答"), "stop", null)
@@ -355,6 +407,33 @@ class HarnessEngineTest {
         @Override
         public Flux<ChatChunk> streamChat(ChatRequest request) {
             return Flux.empty();
+        }
+    }
+
+    private static class StreamingMockProvider implements ChatModelProvider {
+        private final Queue<List<ChatChunk>> streams;
+        private final List<ChatRequest> requests = new ArrayList<>();
+        private int chatCalls;
+
+        private StreamingMockProvider(List<List<ChatChunk>> streams) {
+            this.streams = new ArrayDeque<>(streams);
+        }
+
+        @Override
+        public String providerName() {
+            return "mock";
+        }
+
+        @Override
+        public ChatResponse chat(ChatRequest request) {
+            chatCalls++;
+            throw new AssertionError("streaming path must not call chat()");
+        }
+
+        @Override
+        public Flux<ChatChunk> streamChat(ChatRequest request) {
+            requests.add(request);
+            return Flux.fromIterable(streams.remove());
         }
     }
 }

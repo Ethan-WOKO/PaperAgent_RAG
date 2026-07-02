@@ -3,10 +3,12 @@ package com.yanban.core.harness;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.yanban.core.model.ChatChunk;
 import com.yanban.core.model.ChatMessage;
 import com.yanban.core.model.ChatModelProvider;
 import com.yanban.core.model.ChatRequest;
 import com.yanban.core.model.ChatResponse;
+import com.yanban.core.model.ToolCall;
 import com.yanban.core.model.ToolSpec;
 import com.yanban.core.rag.KnowledgeContextProvider;
 import com.yanban.core.rag.KnowledgeSnippet;
@@ -22,8 +24,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.util.StringUtils;
 
 public class HarnessEngine {
 
@@ -80,6 +84,10 @@ public class HarnessEngine {
     }
 
     public HarnessResult run(HarnessRequest request) {
+        return run(request, null);
+    }
+
+    public HarnessResult run(HarnessRequest request, Consumer<String> tokenConsumer) {
         List<ChatMessage> messages = new ArrayList<>(request.history());
         Set<String> allowedTools = resolveAllowedTools(request);
         if (request.skillPrompt() != null && !request.skillPrompt().isBlank()) {
@@ -115,7 +123,7 @@ public class HarnessEngine {
                 String error = "Harness deadline exceeded before model step " + (steps + 1);
                 log.warn("{} traceId={}", error, request.traceId());
                 if (sawSuccessfulToolResult) {
-                    return synthesizeFinalAnswerAfterToolBudget(request, messages, steps, error);
+                    return synthesizeFinalAnswerAfterToolBudget(request, messages, steps, error, tokenConsumer);
                 }
                 return HarnessResult.failure(error, messages, steps);
             }
@@ -133,7 +141,7 @@ public class HarnessEngine {
                     null,
                     request.traceId()
             );
-            ChatResponse response = callModel(request, chatRequest, "agent_step");
+            ChatResponse response = callModel(request, chatRequest, "agent_step", tokenConsumer);
             ChatMessage assistantMessage = response == null ? null : response.message();
             messages.add(assistantMessage);
 
@@ -172,7 +180,7 @@ public class HarnessEngine {
                     String error = "Harness deadline exceeded before tool execution";
                     log.warn("{} traceId={} provider={}", error, request.traceId(), request.provider());
                     if (sawSuccessfulToolResult) {
-                        return synthesizeFinalAnswerAfterToolBudget(request, messages, steps, error);
+                        return synthesizeFinalAnswerAfterToolBudget(request, messages, steps, error, tokenConsumer);
                     }
                     return HarnessResult.failure(error, messages, steps + 1);
                 }
@@ -180,7 +188,7 @@ public class HarnessEngine {
                     String error = "Tool-call budget exceeded: maxToolCalls=" + maxToolCalls(request);
                     log.warn("{} traceId={} provider={}", error, request.traceId(), request.provider());
                     if (sawSuccessfulToolResult) {
-                        return synthesizeFinalAnswerAfterToolBudget(request, messages, steps + 1, error);
+                        return synthesizeFinalAnswerAfterToolBudget(request, messages, steps + 1, error, tokenConsumer);
                     }
                     return HarnessResult.failure(error, messages, steps + 1);
                 }
@@ -191,7 +199,7 @@ public class HarnessEngine {
                     String error = "Duplicate tool call blocked: " + abbreviate(signature);
                     log.warn("{} traceId={} provider={}", error, request.traceId(), request.provider());
                     if (sawSuccessfulToolResult) {
-                        return synthesizeFinalAnswerAfterToolBudget(request, messages, steps + 1, error);
+                        return synthesizeFinalAnswerAfterToolBudget(request, messages, steps + 1, error, tokenConsumer);
                     }
                     return HarnessResult.failure(error, messages, steps + 1);
                 }
@@ -216,15 +224,24 @@ public class HarnessEngine {
         String error = "Harness exceeded max_steps=" + request.maxSteps();
         log.warn("{} traceId={}", error, request.traceId());
         if (sawSuccessfulToolResult) {
-            return synthesizeFinalAnswerAfterToolBudget(request, messages, steps, error);
+            return synthesizeFinalAnswerAfterToolBudget(request, messages, steps, error, tokenConsumer);
         }
         return HarnessResult.failure(error, messages, steps);
     }
 
     private ChatResponse callModel(HarnessRequest request, ChatRequest chatRequest, String phase) {
+        return callModel(request, chatRequest, phase, null);
+    }
+
+    private ChatResponse callModel(HarnessRequest request,
+                                   ChatRequest chatRequest,
+                                   String phase,
+                                   Consumer<String> tokenConsumer) {
         long startNanos = System.nanoTime();
         try {
-            ChatResponse response = modelProvider.chat(chatRequest);
+            ChatResponse response = tokenConsumer == null
+                    ? modelProvider.chat(chatRequest)
+                    : streamModel(chatRequest, tokenConsumer);
             long durationMs = (System.nanoTime() - startNanos) / 1_000_000;
             ChatResponse.Usage usage = response == null ? null : response.usage();
             log.info("Harness model phase={} provider={} model={} durationMs={} finishReason={} promptTokens={} completionTokens={} totalTokens={} traceId={}",
@@ -249,6 +266,46 @@ public class HarnessEngine {
                     blankToDefault(ex.getMessage(), ex.getClass().getSimpleName()));
             throw ex;
         }
+    }
+
+    private ChatResponse streamModel(ChatRequest chatRequest, Consumer<String> tokenConsumer) {
+        StringBuilder content = new StringBuilder();
+        Map<Integer, StreamingToolCallBuilder> toolCallBuilders = new LinkedHashMap<>();
+        String[] finishReason = new String[1];
+        modelProvider.streamChat(chatRequest)
+                .doOnNext(chunk -> {
+                    if (chunk == null) {
+                        return;
+                    }
+                    if (chunk.content() != null && !chunk.content().isEmpty()) {
+                        content.append(chunk.content());
+                        tokenConsumer.accept(chunk.content());
+                    }
+                    for (ChatChunk.ToolCallDelta delta : chunk.toolCallDeltas()) {
+                        toolCallBuilders
+                                .computeIfAbsent(delta.index(), StreamingToolCallBuilder::new)
+                                .append(delta);
+                    }
+                    if (chunk.done()) {
+                        finishReason[0] = chunk.finishReason();
+                    }
+                })
+                .blockLast();
+
+        List<ToolCall> toolCalls = toolCallBuilders.values().stream()
+                .map(StreamingToolCallBuilder::build)
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        return new ChatResponse(
+                new ChatMessage(
+                        "assistant",
+                        content.length() == 0 ? null : content.toString(),
+                        toolCalls.isEmpty() ? null : toolCalls,
+                        null
+                ),
+                finishReason[0],
+                null
+        );
     }
 
     private int maxToolCalls(HarnessRequest request) {
@@ -285,7 +342,8 @@ public class HarnessEngine {
     private HarnessResult synthesizeFinalAnswerAfterToolBudget(HarnessRequest request,
                                                                List<ChatMessage> messages,
                                                                int steps,
-                                                               String originalError) {
+                                                               String originalError,
+                                                               Consumer<String> tokenConsumer) {
         List<ChatMessage> finalMessages = new ArrayList<>(messages);
         finalMessages.add(ChatMessage.system("""
                 Tool-call budget is exhausted.
@@ -307,7 +365,7 @@ public class HarnessEngine {
                     null,
                     request.traceId()
             );
-            ChatResponse response = callModel(request, chatRequest, "final_synthesis");
+            ChatResponse response = callModel(request, chatRequest, "final_synthesis", tokenConsumer);
             ChatMessage assistantMessage = response == null ? null : response.message();
             if (assistantMessage != null) {
                 finalMessages.add(assistantMessage);
@@ -558,5 +616,48 @@ public class HarnessEngine {
 
     private String blankToDefault(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private static final class StreamingToolCallBuilder {
+        private final int index;
+        private String id;
+        private String type;
+        private String functionName;
+        private final StringBuilder arguments = new StringBuilder();
+
+        private StreamingToolCallBuilder(int index) {
+            this.index = index;
+        }
+
+        private void append(ChatChunk.ToolCallDelta delta) {
+            if (delta == null) {
+                return;
+            }
+            if (StringUtils.hasText(delta.id())) {
+                id = delta.id();
+            }
+            if (StringUtils.hasText(delta.type())) {
+                type = delta.type();
+            }
+            if (StringUtils.hasText(delta.functionName())) {
+                functionName = delta.functionName();
+            }
+            if (delta.argumentsDelta() != null && !delta.argumentsDelta().isEmpty()) {
+                arguments.append(delta.argumentsDelta());
+            }
+        }
+
+        private ToolCall build() {
+            if (!StringUtils.hasText(functionName)) {
+                return null;
+            }
+            String resolvedId = StringUtils.hasText(id) ? id : "tool_call_" + index;
+            String resolvedType = StringUtils.hasText(type) ? type : "function";
+            return new ToolCall(
+                    resolvedId,
+                    resolvedType,
+                    new ToolCall.FunctionCall(functionName, arguments.toString())
+            );
+        }
     }
 }

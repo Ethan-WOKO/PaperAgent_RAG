@@ -7,8 +7,10 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class DeepSeekProperties {
     /** Full OpenAI-compatible chat completions URL. */
     private String apiUrl = "https://api.deepseek.com/v1/chat/completions";
+    /** Full model discovery URL. */
+    private String modelsUrl = "https://api.deepseek.com/models";
     private String apiKey;
-    private String model = "deepseek-chat";
+    private String model = "deepseek-v4-flash";
     private Double temperature = 0.7;
     private Integer maxTokens = 4096;
     private Duration timeout = Duration.ofSeconds(60);
@@ -19,6 +21,14 @@ public class DeepSeekProperties {
 
     public void setApiUrl(String apiUrl) {
         this.apiUrl = apiUrl;
+    }
+
+    public String getModelsUrl() {
+        return modelsUrl;
+    }
+
+    public void setModelsUrl(String modelsUrl) {
+        this.modelsUrl = modelsUrl;
     }
 
     public String getApiKey() {
