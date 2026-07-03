@@ -47,8 +47,14 @@ export function deleteSession(sessionId: number) {
   return http.delete<void>(`/agent/sessions/${sessionId}`);
 }
 
-export function listMessages(sessionId: number) {
-  return http.get<AgentMessageResponse[]>(`/agent/sessions/${sessionId}/messages`);
+export interface ListMessagesParams {
+  limit?: number;
+  beforeId?: number;
+  view?: 'chat' | 'all';
+}
+
+export function listMessages(sessionId: number, params?: ListMessagesParams) {
+  return http.get<AgentMessageResponse[]>(`/agent/sessions/${sessionId}/messages`, { params });
 }
 
 export interface AgentPlanStepResponse {

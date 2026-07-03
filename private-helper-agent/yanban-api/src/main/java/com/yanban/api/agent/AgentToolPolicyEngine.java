@@ -55,15 +55,21 @@ public class AgentToolPolicyEngine {
                 "\u5b9e\u65f6", "\u65b0\u95fb", "\u53d1\u5e03", "\u4ef7\u683c", "\u653f\u7b56", "\u6cd5\u89c4",
                 "\u7248\u672c", "\u6a21\u578b\u5217\u8868",
                 "latest", "current", "recent", "today", "now", "news", "released", "price", "pricing");
+        boolean healthIntent = containsAny(normalized,
+                "\u533b\u5b66", "\u533b\u7597", "\u5065\u5eb7", "\u75be\u75c5", "\u75c5\u56e0", "\u53d1\u75c5",
+                "\u53d1\u75c5\u673a\u5236", "\u75c7\u72b6", "\u8bca\u65ad", "\u6cbb\u7597",
+                "\u836f\u7269", "\u764c", "\u8840\u764c", "\u767d\u8840\u75c5", "\u7cd6\u5c3f\u75c5",
+                "medical", "medicine", "health", "disease", "symptom", "diagnosis", "treatment",
+                "diabetes", "leukemia", "cancer", "pathogenesis", "mechanism");
 
         addIfRegistered(allowed, registeredTools, knowledgeIntent, SEARCH_KNOWLEDGE);
         addIfRegistered(allowed, registeredTools, literatureIntent, SEARCH_LITERATURE);
-        addIfRegistered(allowed, registeredTools, (explicitSearch || currentIntent) && !literatureIntent, SEARCH_WEB);
+        addIfRegistered(allowed, registeredTools, (explicitSearch || currentIntent || healthIntent) && !literatureIntent, SEARCH_WEB);
 
         int maxToolCalls = allowed.isEmpty()
                 ? 0
                 : allowed.contains(SEARCH_WEB) && allowed.size() == 1 ? 1 : 2;
-        return new Decision(List.copyOf(allowed), maxToolCalls, 1, reason(allowed, explicitSearch, currentIntent, literatureIntent, knowledgeIntent));
+        return new Decision(List.copyOf(allowed), maxToolCalls, 1, reason(allowed, explicitSearch, currentIntent, literatureIntent, knowledgeIntent, healthIntent));
     }
 
     private void addIfRegistered(Set<String> allowed, Set<String> registeredTools, boolean condition, String toolName) {
@@ -76,7 +82,8 @@ public class AgentToolPolicyEngine {
                           boolean explicitSearch,
                           boolean currentIntent,
                           boolean literatureIntent,
-                          boolean knowledgeIntent) {
+                          boolean knowledgeIntent,
+                          boolean healthIntent) {
         if (allowed.isEmpty()) {
             return "direct_answer_no_tools";
         }
@@ -92,6 +99,9 @@ public class AgentToolPolicyEngine {
         }
         if (knowledgeIntent) {
             reasons.add("knowledge_intent");
+        }
+        if (healthIntent) {
+            reasons.add("health_or_medical");
         }
         return String.join("+", reasons);
     }

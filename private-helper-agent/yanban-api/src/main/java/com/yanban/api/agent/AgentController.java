@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -53,8 +54,11 @@ public class AgentController {
 
     @GetMapping("/{sessionId}/messages")
     public List<AgentMessageResponse> listMessages(@AuthenticationPrincipal JwtUser currentUser,
-                                                   @PathVariable Long sessionId) {
-        return agentService.listMessages(currentUser.id(), sessionId);
+                                                   @PathVariable Long sessionId,
+                                                   @RequestParam(defaultValue = "50") Integer limit,
+                                                   @RequestParam(required = false) Long beforeId,
+                                                   @RequestParam(defaultValue = "chat") String view) {
+        return agentService.listMessages(currentUser.id(), sessionId, limit, beforeId, view);
     }
 
     @PostMapping("/{sessionId}/messages")

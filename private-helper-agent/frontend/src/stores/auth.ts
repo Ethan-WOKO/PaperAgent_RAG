@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
-import { login, me, register, type AuthResponse, type UserMeResponse } from '@/api/auth';
+import { demoLogin, login, me, register, type AuthResponse, type UserMeResponse } from '@/api/auth';
 
 const ACCESS_TOKEN_KEY = 'yanban_access_token';
 const REFRESH_TOKEN_KEY = 'yanban_refresh_token';
@@ -27,6 +27,12 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function signIn(payload: { username: string; password: string }) {
     const { data } = await login(payload);
+    persist(data);
+    await fetchCurrentUser();
+  }
+
+  async function signInDemo() {
+    const { data } = await demoLogin();
     persist(data);
     await fetchCurrentUser();
   }
@@ -70,6 +76,7 @@ export const useAuthStore = defineStore('auth', () => {
     isAuthenticated,
     restore,
     signIn,
+    signInDemo,
     signUp,
     fetchCurrentUser,
     clear,

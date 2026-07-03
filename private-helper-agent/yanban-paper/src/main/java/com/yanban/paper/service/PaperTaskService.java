@@ -1,5 +1,6 @@
 package com.yanban.paper.service;
 
+import com.yanban.core.user.UserAccountPolicy;
 import com.yanban.paper.domain.PaperTask;
 import com.yanban.paper.domain.PaperTaskArtifact;
 import com.yanban.paper.domain.PaperTaskArtifactRepository;
@@ -14,6 +15,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpStatus;
@@ -31,15 +33,18 @@ public class PaperTaskService {
     private final PaperTaskArtifactRepository artifactRepository;
     private final PaperStorageService paperStorageService;
     private final PaperOrchestrator paperOrchestrator;
+    private final ObjectProvider<UserAccountPolicy> accountPolicy;
 
     public PaperTaskService(PaperTaskRepository paperTaskRepository,
                             PaperTaskArtifactRepository artifactRepository,
                             PaperStorageService paperStorageService,
-                            PaperOrchestrator paperOrchestrator) {
+                            PaperOrchestrator paperOrchestrator,
+                            ObjectProvider<UserAccountPolicy> accountPolicy) {
         this.paperTaskRepository = paperTaskRepository;
         this.artifactRepository = artifactRepository;
         this.paperStorageService = paperStorageService;
         this.paperOrchestrator = paperOrchestrator;
+        this.accountPolicy = accountPolicy;
     }
 
     @Transactional
@@ -47,6 +52,11 @@ public class PaperTaskService {
         MultipartFile file = request.mainTex() == null ? request.file() : request.mainTex();
         validateTexFile(file);
         validateBibFile(request.bibFile());
+        UserAccountPolicy policy = accountPolicy.getIfAvailable();
+        if (policy != null) {
+            long totalBytes = file.getSize() + (request.bibFile() == null ? 0 : request.bibFile().getSize());
+            policy.assertCanCreatePaperTask(userId, totalBytes);
+        }
         String objectKey = paperStorageService.storeOriginal(userId, file);
         String bibObjectKey = request.bibFile() == null || request.bibFile().isEmpty()
                 ? null

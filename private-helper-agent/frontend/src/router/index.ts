@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import LoginPage from '@/views/LoginPage.vue';
 import RegisterPage from '@/views/RegisterPage.vue';
+import DemoPage from '@/views/DemoPage.vue';
 import ChatPage from '@/views/ChatPage.vue';
 import SettingsPage from '@/views/SettingsPage.vue';
 import KnowledgeBasePage from '@/views/KnowledgeBasePage.vue';
@@ -12,6 +13,7 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/', redirect: '/chat' },
+    { path: '/demo', name: 'demo', component: DemoPage },
     { path: '/login', name: 'login', component: LoginPage, meta: { guestOnly: true } },
     { path: '/register', name: 'register', component: RegisterPage, meta: { guestOnly: true } },
     { path: '/chat', name: 'chat', component: ChatPage, meta: { requiresAuth: true } },

@@ -105,6 +105,12 @@ class AuthControllerIntegrationTest {
                 .andExpect(status().isUnauthorized());
     }
 
+    @Test
+    void demoLoginIsUnavailableWhenDemoIsDisabled() throws Exception {
+        mockMvc.perform(post("/api/v1/auth/demo-login"))
+                .andExpect(status().isNotFound());
+    }
+
     private void register(String username, String password) throws Exception {
         mockMvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)

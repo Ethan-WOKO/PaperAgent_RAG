@@ -9,6 +9,7 @@ public record KbDocumentResponse(
         String filename,
         String status,
         boolean isPublic,
+        String sourceType,
         Instant createdAt,
         Instant updatedAt
 ) {
@@ -19,6 +20,7 @@ public record KbDocumentResponse(
                 document.getFilename(),
                 document.getStatus(),
                 Boolean.TRUE.equals(document.getIsPublic()),
+                document.getSourceType(),
                 document.getCreatedAt(),
                 document.getUpdatedAt()
         );

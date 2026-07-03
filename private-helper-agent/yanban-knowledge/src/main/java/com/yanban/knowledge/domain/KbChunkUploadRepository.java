@@ -8,4 +8,8 @@ public interface KbChunkUploadRepository extends JpaRepository<KbChunkUpload, Lo
     Optional<KbChunkUpload> findByUploadIdAndChunkNumber(String uploadId, Integer chunkNumber);
 
     List<KbChunkUpload> findByUploadIdOrderByChunkNumberAsc(String uploadId);
+
+    List<KbChunkUpload> findByUserId(Long userId);
+
+    void deleteByUserId(Long userId);
 }

@@ -2,10 +2,12 @@
   <div class="page-shell auth-shell">
     <div class="auth-panel">
       <div class="auth-brand-block">
-        <div class="auth-logo">研</div>
+        <div class="auth-logo">
+          <img src="/logo.png" alt="Yanban Agent logo" />
+        </div>
         <div class="workbench-kicker">Yanban Agent</div>
         <h1>欢迎回来</h1>
-        <p>登录后继续使用对话、知识库、论文处理与 Skills 工作台。</p>
+        <p>登录后继续使用对话、知识库、论文处理与 Skills 工作台。也可以直接进入游客 Demo 体验。</p>
       </div>
       <NCard class="auth-card" :bordered="false">
         <NForm :model="form" @submit.prevent="handleSubmit">
@@ -17,7 +19,8 @@
           </NFormItem>
           <NSpace vertical size="large">
             <NButton type="primary" size="large" block :loading="submitting" @click="handleSubmit">登录</NButton>
-            <NButton block secondary @click="router.push('/register')">没有账号？去注册</NButton>
+            <NButton block secondary :loading="demoSubmitting" @click="handleDemoLogin">游客体验</NButton>
+            <NButton block quaternary @click="router.push('/register')">没有账号？去注册</NButton>
           </NSpace>
         </NForm>
       </NCard>
@@ -36,6 +39,7 @@ const router = useRouter();
 const route = useRoute();
 const authStore = useAuthStore();
 const submitting = ref(false);
+const demoSubmitting = ref(false);
 const form = reactive({ username: '', password: '' });
 
 async function handleSubmit() {
@@ -52,6 +56,19 @@ async function handleSubmit() {
     ui.message.error(error.response?.data?.message || '登录失败');
   } finally {
     submitting.value = false;
+  }
+}
+
+async function handleDemoLogin() {
+  demoSubmitting.value = true;
+  try {
+    await authStore.signInDemo();
+    ui.message.success('已进入游客体验');
+    await router.push('/chat?demo=1');
+  } catch (error: any) {
+    ui.message.error(error.response?.data?.message || 'Demo 入口未开启');
+  } finally {
+    demoSubmitting.value = false;
   }
 }
 </script>

@@ -114,12 +114,13 @@
                   <span>{{ formatDateTime(item.updatedAt) }}</span>
                   <NSpace size="small" justify="end">
                     <NButton text type="primary" @click="handlePreview(item)">Preview</NButton>
-                    <NPopconfirm @positive-click="handleDelete(item.id)">
+                    <NPopconfirm v-if="item.sourceType !== 'DEMO_SEED'" @positive-click="handleDelete(item.id)">
                       <template #trigger>
                         <NButton text type="error">Delete</NButton>
                       </template>
                       Delete this document?
                     </NPopconfirm>
+                    <NTag v-else size="small" type="info">Demo seed</NTag>
                   </NSpace>
                 </article>
               </div>

@@ -38,6 +38,16 @@ yanban:
     enabled: ${INVITE_CODE_ENABLED:true}
     codes: ${INVITE_CODES:}
     max-uses: ${INVITE_CODE_MAX_USES:5}
+  demo:
+    enabled: ${DEMO_ENABLED:false}
+    seed-on-startup: ${DEMO_SEED_ON_STARTUP:true}
+    username: ${DEMO_USERNAME:demo}
+    reset-cron: "${DEMO_RESET_CRON:0 30 3 * * *}"
+    canonical-url: ${DEMO_CANONICAL_URL:http://yanban.online:18080/demo}
+    max-upload-bytes: ${DEMO_MAX_UPLOAD_BYTES:3145728}
+    max-uploads-per-reset: ${DEMO_MAX_UPLOADS_PER_RESET:5}
+    max-chat-messages-per-hour: ${DEMO_MAX_CHAT_MESSAGES_PER_HOUR:60}
+    max-paper-tasks-per-reset: ${DEMO_MAX_PAPER_TASKS_PER_RESET:2}
   observability:
     default-window-minutes: 60
     plan-failure-rate-warning: 0.10

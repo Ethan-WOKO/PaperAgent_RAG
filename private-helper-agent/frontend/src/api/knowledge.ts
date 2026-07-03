@@ -6,6 +6,7 @@ export interface KbDocumentItem {
   filename: string;
   status: 'UPLOADING' | 'PROCESSING' | 'READY' | 'FAILED';
   isPublic: boolean;
+  sourceType: 'USER_UPLOAD' | 'DEMO_SEED' | string;
   mimeType: string | null;
   fileSize: number | null;
   errorMessage: string | null;
@@ -19,6 +20,7 @@ export interface KbDocumentResponse {
   filename: string;
   status: string;
   isPublic: boolean;
+  sourceType: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -2,6 +2,7 @@ package com.yanban.api.settings;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.core.user.UserAccountPolicy;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
@@ -51,17 +52,20 @@ public class UserSettingsService {
     private final SettingsCryptoService cryptoService;
     private final ModelDiscoveryService modelDiscoveryService;
     private final ObjectMapper objectMapper;
+    private final UserAccountPolicy accountPolicy;
 
     public UserSettingsService(SysUserSettingsRepository repository,
                                UserModelRepository userModelRepository,
                                SettingsCryptoService cryptoService,
                                ModelDiscoveryService modelDiscoveryService,
-                               ObjectMapper objectMapper) {
+                               ObjectMapper objectMapper,
+                               UserAccountPolicy accountPolicy) {
         this.repository = repository;
         this.userModelRepository = userModelRepository;
         this.cryptoService = cryptoService;
         this.modelDiscoveryService = modelDiscoveryService;
         this.objectMapper = objectMapper;
+        this.accountPolicy = accountPolicy;
     }
 
     @Transactional
@@ -72,6 +76,7 @@ public class UserSettingsService {
 
     @Transactional
     public UserSettingsResponse update(Long userId, UserSettingsRequest request) {
+        accountPolicy.assertSettingsMutable(userId);
         SysUserSettings settings = getOrCreate(userId);
         String provider = normalizeProvider(request.defaultProvider(), settings.getDefaultProvider());
         String deepseekModel = StringUtils.hasText(request.deepseekModel()) ? request.deepseekModel().trim() : settings.getDeepseekModel();
@@ -94,6 +99,7 @@ public class UserSettingsService {
 
     @Transactional
     public UserSettingsResponse refreshProviderModels(Long userId, String provider) {
+        accountPolicy.assertSettingsMutable(userId);
         SysUserSettings settings = getOrCreate(userId);
         String resolvedProvider = normalizeProvider(provider, settings.getDefaultProvider());
         if (DEFAULT_PROVIDER.equals(resolvedProvider)) {
@@ -166,6 +172,7 @@ public class UserSettingsService {
 
     @Transactional
     public UserModelResponse createCustomModel(Long userId, UserModelRequest request) {
+        accountPolicy.assertSettingsMutable(userId);
         ensureUserInitialized(userId);
         List<UserModel> existing = userModelRepository.findByUserIdOrderBySortOrderAscIdAsc(userId);
         int nextSortOrder = existing.stream()
@@ -189,6 +196,7 @@ public class UserSettingsService {
 
     @Transactional
     public UserModelResponse updateCustomModel(Long userId, Long modelId, UserModelRequest request) {
+        accountPolicy.assertSettingsMutable(userId);
         UserModel model = findOwnedCustomModel(userId, modelId);
         String encryptedApiKey = resolveEncryptedApiKey(model.getApiKeyEncrypted(), request.apiKey());
         model.update(request.label().trim(), request.modelName().trim(), request.apiUrl().trim(), encryptedApiKey);
@@ -197,6 +205,7 @@ public class UserSettingsService {
 
     @Transactional
     public void deleteCustomModel(Long userId, Long modelId) {
+        accountPolicy.assertSettingsMutable(userId);
         UserModel model = findOwnedCustomModel(userId, modelId);
         userModelRepository.delete(model);
         userModelRepository.flush();

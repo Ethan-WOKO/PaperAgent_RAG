@@ -16,6 +16,11 @@
 
     <dependencies>
         <dependency>
+            <groupId>com.yanban</groupId>
+            <artifactId>yanban-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
             <groupId>co.elastic.clients</groupId>
             <artifactId>elasticsearch-java</artifactId>
         </dependency>

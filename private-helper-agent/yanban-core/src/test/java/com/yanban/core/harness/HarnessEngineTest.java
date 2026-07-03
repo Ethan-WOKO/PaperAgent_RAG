@@ -121,8 +121,30 @@ class HarnessEngineTest {
 
         assertThat(result.success()).isTrue();
         assertThat(result.assistantContent()).isEqualTo("hello");
-        assertThat(streamed).containsExactly("he", "llo");
+        assertThat(streamed).containsExactly("hello");
         assertThat(provider.chatCalls).isZero();
+    }
+
+    @Test
+    void fallsBackToNonStreamingWhenStreamDecodingFailsBeforeTokens() {
+        StreamFailureThenChatProvider provider = new StreamFailureThenChatProvider(
+                new RuntimeException("Encoding error [MALFORMED[1]]"),
+                new ChatResponse(ChatMessage.assistant("fallback answer"), "stop", null)
+        );
+        HarnessEngine engine = new HarnessEngine(provider, new ToolRegistry().register(new EchoToolExecutor(objectMapper)), objectMapper);
+        List<String> streamed = new ArrayList<>();
+
+        HarnessResult result = engine.run(
+                new HarnessRequest(List.of(), 1001L, "hello", "mock", "mock-model",
+                        null, null, 20, true, null, null, List.of()),
+                streamed::add
+        );
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.assistantContent()).isEqualTo("fallback answer");
+        assertThat(streamed).containsExactly("fallback answer");
+        assertThat(provider.streamCalls).isEqualTo(1);
+        assertThat(provider.chatCalls).isEqualTo(1);
     }
 
     @Test
@@ -187,6 +209,107 @@ class HarnessEngineTest {
     }
 
     @Test
+    void retriesAndSuppressesPseudoToolProtocolTextInStreamingDirectAnswer() {
+        StreamingMockProvider provider = new StreamingMockProvider(List.of(
+                List.of(
+                        ChatChunk.token("This is a health question, I will search authoritative information.\n\n"),
+                        ChatChunk.token("<||DSML||tool_calls>\n<||DSML||invoke name=\"search_web\">\n"),
+                        ChatChunk.token("<||DSML||parameter name=\"query\">diabetes cause</||DSML||parameter>\n"),
+                        ChatChunk.token("</||DSML||invoke>\n</||DSML||tool_calls>"),
+                        ChatChunk.done("stop")
+                ),
+                List.of(
+                        ChatChunk.token("Diabetes forms when insulin production is insufficient or insulin action is impaired."),
+                        ChatChunk.done("stop")
+                )
+        ));
+        HarnessEngine engine = new HarnessEngine(provider, new ToolRegistry().register(new EchoToolExecutor(objectMapper)), objectMapper);
+        List<String> streamed = new ArrayList<>();
+
+        HarnessResult result = engine.run(
+                new HarnessRequest(List.of(), 1001L, "How does diabetes form?", "mock", "mock-model",
+                        null, null, 20, true, null, null, List.of()),
+                streamed::add
+        );
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.assistantContent()).contains("insulin");
+        assertThat(streamed).containsExactly("Diabetes forms when insulin production is insufficient or insulin action is impaired.");
+        assertThat(String.join("", streamed)).doesNotContain("DSML", "tool_calls", "search_web");
+        assertThat(provider.requests).hasSize(2);
+        assertThat(provider.requests.get(0).tools()).isNull();
+        assertThat(provider.requests.get(1).tools()).isNull();
+    }
+
+    @Test
+    void retriesAndSuppressesChinesePseudoToolProtocolTextInStreamingDirectAnswer() {
+        StreamingMockProvider provider = new StreamingMockProvider(List.of(
+                List.of(
+                        ChatChunk.token("这是一个医学健康问题，我来为您搜索权威的科普信息。\n\n"),
+                        ChatChunk.token("<\uff5c\uff5cDSML\uff5c\uff5ctool_calls>\n"),
+                        ChatChunk.token("<\uff5c\uff5cDSML\uff5c\uff5cinvoke name=\"search_web\">\n"),
+                        ChatChunk.token("<\uff5c\uff5cDSML\uff5c\uff5cparameter name=\"query\" string=\"true\">白血病形成原因 发病机制 医学解释</\uff5c\uff5cDSML\uff5c\uff5cparameter>\n"),
+                        ChatChunk.token("</\uff5c\uff5cDSML\uff5c\uff5cinvoke>\n</\uff5c\uff5cDSML\uff5c\uff5ctool_calls>"),
+                        ChatChunk.done("stop")
+                ),
+                List.of(
+                        ChatChunk.token("白血病通常源于造血细胞发生遗传改变，导致异常细胞失控增殖。"),
+                        ChatChunk.done("stop")
+                )
+        ));
+        HarnessEngine engine = new HarnessEngine(provider, new ToolRegistry().register(new EchoToolExecutor(objectMapper)), objectMapper);
+        List<String> streamed = new ArrayList<>();
+
+        HarnessResult result = engine.run(
+                new HarnessRequest(List.of(), 1001L, "白血病是如何形成的？", "mock", "mock-model",
+                        null, null, 20, true, null, null, List.of()),
+                streamed::add
+        );
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.assistantContent()).contains("造血细胞");
+        assertThat(String.join("", streamed)).doesNotContain("DSML", "tool_calls", "search_web", "我来为您搜索");
+        assertThat(provider.requests).hasSize(2);
+        assertThat(provider.requests.get(0).messages().get(0).content()).contains("No tools are available");
+    }
+
+    @Test
+    void convertsPseudoDsmlToolProtocolToStructuredToolCallWhenToolIsVisible() {
+        StreamingMockProvider provider = new StreamingMockProvider(List.of(
+                List.of(
+                        ChatChunk.token("<\uff5c\uff5cDSML\uff5c\uff5ctool_calls>\n"),
+                        ChatChunk.token("<\uff5c\uff5cDSML\uff5c\uff5cinvoke name=\"search_web\">\n"),
+                        ChatChunk.token("<\uff5c\uff5cDSML\uff5c\uff5cparameter name=\"query\" string=\"true\">leukemia pathogenesis</\uff5c\uff5cDSML\uff5c\uff5cparameter>\n"),
+                        ChatChunk.token("<\uff5c\uff5cDSML\uff5c\uff5cparameter name=\"topK\" string=\"false\">5</\uff5c\uff5cDSML\uff5c\uff5cparameter>\n"),
+                        ChatChunk.token("</\uff5c\uff5cDSML\uff5c\uff5cinvoke>\n</\uff5c\uff5cDSML\uff5c\uff5ctool_calls>"),
+                        ChatChunk.done("stop")
+                ),
+                List.of(
+                        ChatChunk.token("Leukemia arises when blood-forming cells acquire mutations that disrupt normal growth control."),
+                        ChatChunk.done("stop")
+                )
+        ));
+        FakeSearchWebToolExecutor searchWeb = new FakeSearchWebToolExecutor(objectMapper);
+        HarnessEngine engine = new HarnessEngine(provider, new ToolRegistry().register(searchWeb), objectMapper);
+        List<String> streamed = new ArrayList<>();
+
+        HarnessResult result = engine.run(
+                new HarnessRequest(List.of(), 1001L, "How does leukemia form?", "mock", "mock-model",
+                        null, null, 20, true, null, null, List.of("search_web")),
+                streamed::add
+        );
+
+        assertThat(result.success()).isTrue();
+        assertThat(searchWeb.called).isTrue();
+        assertThat(searchWeb.lastQuery).isEqualTo("leukemia pathogenesis");
+        assertThat(result.assistantContent()).contains("blood-forming cells");
+        assertThat(String.join("", streamed)).doesNotContain("DSML", "tool_calls", "search_web");
+        assertThat(result.messages()).extracting(ChatMessage::role)
+                .containsExactly("user", "assistant", "tool", "assistant");
+        assertThat(result.messages().get(2).toolCallId()).isEqualTo("pseudo_tool_call_1");
+    }
+
+    @Test
     void usesKnowledgeContextWhenRagEnabled() {
         MockProvider provider = new MockProvider(List.of(
                 new ChatResponse(ChatMessage.assistant("参考知识库回答"), "stop", null)
@@ -203,8 +326,9 @@ class HarnessEngineTest {
         assertThat(result.success()).isTrue();
         assertThat(knowledge.called).isTrue();
         assertThat(provider.requests.get(0).messages()).extracting(ChatMessage::role)
-                .containsExactly("system", "user");
+                .containsExactly("system", "system", "user");
         assertThat(provider.requests.get(0).messages().get(0).content()).contains("alpha knowledge");
+        assertThat(provider.requests.get(0).messages().get(1).content()).contains("Tool output contract");
         assertThat(knowledge.topK).isEqualTo(5);
     }
 
@@ -223,7 +347,8 @@ class HarnessEngineTest {
         assertThat(result.success()).isTrue();
         assertThat(knowledge.called).isFalse();
         assertThat(provider.requests.get(0).messages()).extracting(ChatMessage::role)
-                .containsExactly("user");
+                .containsExactly("system", "user");
+        assertThat(provider.requests.get(0).messages().get(0).content()).contains("Tool output contract");
     }
 
     @Test
@@ -254,12 +379,13 @@ class HarnessEngineTest {
         assertThat(searchWeb.lastQuery).contains("latest official model release 2026");
         assertThat(provider.requests).hasSize(1);
         assertThat(provider.requests.get(0).messages()).extracting(ChatMessage::role)
-                .containsExactly("system", "system", "user");
+                .containsExactly("system", "system", "system", "user");
         assertThat(provider.requests.get(0).messages().get(0).content()).contains("External web evidence is required");
         assertThat(provider.requests.get(0).messages().get(1).content())
                 .contains("Preloaded current web evidence")
                 .contains("OpenAI release notes")
                 .contains("https://example.com/openai");
+        assertThat(provider.requests.get(0).messages().get(2).content()).contains("No tools are available");
     }
 
     @Test
@@ -508,6 +634,35 @@ class HarnessEngineTest {
         public Flux<ChatChunk> streamChat(ChatRequest request) {
             requests.add(request);
             return Flux.fromIterable(streams.remove());
+        }
+    }
+
+    private static class StreamFailureThenChatProvider implements ChatModelProvider {
+        private final RuntimeException streamFailure;
+        private final ChatResponse chatResponse;
+        private int streamCalls;
+        private int chatCalls;
+
+        private StreamFailureThenChatProvider(RuntimeException streamFailure, ChatResponse chatResponse) {
+            this.streamFailure = streamFailure;
+            this.chatResponse = chatResponse;
+        }
+
+        @Override
+        public String providerName() {
+            return "mock";
+        }
+
+        @Override
+        public ChatResponse chat(ChatRequest request) {
+            chatCalls++;
+            return chatResponse;
+        }
+
+        @Override
+        public Flux<ChatChunk> streamChat(ChatRequest request) {
+            streamCalls++;
+            return Flux.error(streamFailure);
         }
     }
 }

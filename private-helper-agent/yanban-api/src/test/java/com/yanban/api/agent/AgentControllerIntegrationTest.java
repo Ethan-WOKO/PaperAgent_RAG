@@ -16,6 +16,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.core.agent.AgentMessage;
+import com.yanban.core.agent.AgentMessageRepository;
 import com.yanban.core.model.ChatRequest;
 import com.yanban.core.model.ChatMessage;
 import com.yanban.core.model.ChatModelProvider;
@@ -55,6 +57,9 @@ class AgentControllerIntegrationTest {
 
     @Autowired
     ObjectMapper objectMapper;
+
+    @Autowired
+    AgentMessageRepository agentMessages;
 
     @MockBean(name = "chatModelProvider")
     ChatModelProvider chatModelProvider;
@@ -151,7 +156,7 @@ class AgentControllerIntegrationTest {
                     assertThat(message.content()).contains("DeepSeek");
                 });
 
-        mockMvc.perform(get("/api/v1/agent/sessions/{id}/messages", sessionId)
+        mockMvc.perform(get("/api/v1/agent/sessions/{id}/messages?view=all&limit=10", sessionId)
                         .header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(2))
@@ -183,6 +188,32 @@ class AgentControllerIntegrationTest {
     }
 
     @Test
+    void modelFailurePersistsUserMessageAndVisibleError() throws Exception {
+        when(chatModelProvider.providerName()).thenReturn("mock");
+        when(chatModelProvider.chat(any())).thenThrow(new IllegalStateException("mock model failed"));
+        String token = registerAndGetToken("agent_user_model_failure");
+        long sessionId = createSession(token, "Failure");
+
+        mockMvc.perform(post("/api/v1/agent/sessions/{id}/messages", sessionId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"please fail\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.errorMessage").value(org.hamcrest.Matchers.containsString("mock model failed")))
+                .andExpect(jsonPath("$.messages.length()").value(2))
+                .andExpect(jsonPath("$.messages[0].role").value("user"))
+                .andExpect(jsonPath("$.messages[1].role").value("assistant"));
+
+        mockMvc.perform(get("/api/v1/agent/sessions/{id}/messages", sessionId)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].content").value("please fail"))
+                .andExpect(jsonPath("$[1].content").value(org.hamcrest.Matchers.containsString("mock model failed")));
+    }
+
+    @Test
     void persistedToolMessagesKeepToolCallIdInNextModelRequest() throws Exception {
         when(chatModelProvider.providerName()).thenReturn("mock");
         when(chatModelProvider.chat(any()))
@@ -207,7 +238,7 @@ class AgentControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true));
 
-        mockMvc.perform(get("/api/v1/agent/sessions/{id}/messages", sessionId)
+        mockMvc.perform(get("/api/v1/agent/sessions/{id}/messages?view=all&limit=10", sessionId)
                         .header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[2].role").value("tool"))
@@ -229,6 +260,46 @@ class AgentControllerIntegrationTest {
                 .singleElement()
                 .extracting(ChatMessage::toolCallId)
                 .isEqualTo("call-1");
+    }
+
+    @Test
+    void invalidHistoricalToolMessagesAreDowngradedBeforeModelRequest() throws Exception {
+        when(chatModelProvider.providerName()).thenReturn("mock");
+        when(chatModelProvider.chat(any()))
+                .thenReturn(new ChatResponse(ChatMessage.assistant("second done"), "stop", null));
+        String token = registerAndGetToken("agent_user_invalid_tool_history");
+        long userId = currentUserId(token);
+        long sessionId = createSession(token, "Invalid Tool History");
+
+        String toolCallsJson = objectMapper.writeValueAsString(List.of(new ToolCall(
+                "call-old",
+                "function",
+                new ToolCall.FunctionCall("echo", "{\"message\":\"hello\"}")
+        )));
+        agentMessages.save(new AgentMessage(sessionId, userId, "user", "old tool request", null, null));
+        agentMessages.save(new AgentMessage(sessionId, userId, "assistant", null, toolCallsJson, null, null));
+        agentMessages.save(new AgentMessage(sessionId, userId, "tool", "{\"message\":\"hello\"}", null, null, null));
+
+        mockMvc.perform(post("/api/v1/agent/sessions/{id}/messages", sessionId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"content\":\"continue\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+
+        ArgumentCaptor<ChatRequest> captor = ArgumentCaptor.forClass(ChatRequest.class);
+        verify(chatModelProvider).chat(captor.capture());
+
+        ChatRequest request = captor.getValue();
+        assertThat(request.messages())
+                .noneMatch(message -> "tool".equals(message.role()));
+        assertThat(request.messages())
+                .filteredOn(message -> "assistant".equals(message.role()))
+                .allMatch(message -> message.toolCalls() == null || message.toolCalls().isEmpty());
+        assertThat(request.messages())
+                .filteredOn(message -> "assistant".equals(message.role()))
+                .extracting(ChatMessage::content)
+                .anyMatch(content -> content != null && content.contains("Previous tool result"));
     }
 
     @Test
@@ -378,6 +449,14 @@ class AgentControllerIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"title\":\"" + title + "\",\"maxSteps\":20}"))
                 .andExpect(status().isCreated())
+                .andReturn();
+        return objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asLong();
+    }
+
+    private long currentUserId(String token) throws Exception {
+        MvcResult result = mockMvc.perform(get("/api/v1/users/me")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
                 .andReturn();
         return objectMapper.readTree(result.getResponse().getContentAsString()).get("id").asLong();
     }

@@ -36,6 +36,17 @@ class AgentToolPolicyEngineTest {
     }
 
     @Test
+    void healthQuestionsUseOneWebSearchForAuthoritativeEvidence() {
+        AgentToolPolicyEngine engine = new AgentToolPolicyEngine(registry());
+
+        AgentToolPolicyEngine.Decision decision = engine.decide("\u767d\u8840\u75c5\u662f\u5982\u4f55\u5f62\u6210\u7684\uff1f", false, null);
+
+        assertThat(decision.allowedTools()).containsExactly("search_web");
+        assertThat(decision.maxToolCalls()).isEqualTo(1);
+        assertThat(decision.reason()).isEqualTo("health_or_medical");
+    }
+
+    @Test
     void literatureRequestUsesLiteratureSearch() {
         AgentToolPolicyEngine engine = new AgentToolPolicyEngine(registry());
 

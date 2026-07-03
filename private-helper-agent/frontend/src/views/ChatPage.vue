@@ -88,7 +88,7 @@
                 placeholder="Skill（可选）"
               />
               <NCheckbox v-model:checked="showProcessMessages">过程</NCheckbox>
-              <NButton secondary round @click="reloadCurrentMessages" :disabled="!selectedSessionId">刷新</NButton>
+              <NButton secondary round @click="() => reloadCurrentMessages()" :disabled="!selectedSessionId">刷新</NButton>
             </div>
           </template>
 
@@ -100,8 +100,21 @@
             <div class="chat-intro-bar__status"><span /> Live</div>
           </div>
 
+          <div v-if="showDemoQuestions" class="demo-question-strip">
+            <div class="demo-question-strip__head">
+              <strong>Demo 示例问题</strong>
+              <span>点击后会填入输入框，你可以直接发送或继续修改。</span>
+            </div>
+            <div class="demo-question-strip__grid">
+              <button v-for="question in demoQuestions" :key="question" type="button" @click="useDemoQuestion(question)">
+                {{ question }}
+              </button>
+            </div>
+          </div>
+
           <div ref="messagesContainerRef" class="chat-messages">
-            <NEmpty v-if="filteredMessages.length === 0" description="发一条消息开始对话" class="chat-empty" />
+            <div v-if="messagesLoading" class="chat-loading">Loading conversation...</div>
+            <NEmpty v-else-if="filteredMessages.length === 0" description="发一条消息开始对话" class="chat-empty" />
             <div v-for="message in filteredMessages" :key="message.localId" class="message-row" :class="`message-row--${message.role}`">
               <template v-if="message.role === 'system' || message.role === 'tool'">
                 <details class="process-message-card">
@@ -263,9 +276,10 @@
 <script setup lang="ts">
 import { NButton, NCard, NCheckbox, NDropdown, NEmpty, NInput, NModal, NSelect, NSpace } from 'naive-ui';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import AppLayout from '@/components/AppLayout.vue';
 import MarkdownMessage from '@/components/MarkdownMessage.vue';
+import { getDemoConfig } from '@/api/demo';
 import {
   createPlan,
   createSession,
@@ -310,15 +324,25 @@ interface MessageSegment {
 }
 
 const router = useRouter();
+const route = useRoute();
 const authStore = useAuthStore();
+const DEFAULT_DEMO_QUESTIONS = [
+  '根据知识库，概括这个项目能解决什么问题。',
+  '演示文档里的组会时间、地点和下次 DDL 是什么？',
+  '这个项目的 RAG 流程包含哪些步骤？',
+  '用计划模式帮我把两周内完善 Agent 能力拆成任务。',
+];
 const sessions = ref<AgentSessionResponse[]>([]);
 const selectedSessionId = ref<number | null>(null);
 const messages = ref<ChatMessageView[]>([]);
+const messagesBySessionId = ref<Record<number, ChatMessageView[]>>({});
+const messagesLoading = ref(false);
 const draft = ref('');
 const sending = ref(false);
 const selectedSkillId = ref<string | null>(null);
 const availableSkills = ref<SkillListItemResponse[]>([]);
 const settings = ref<UserSettingsResponse | null>(null);
+const demoQuestions = ref(DEFAULT_DEMO_QUESTIONS);
 const selectedModelKey = ref('');
 const ragDisabled = ref(false);
 const planMode = ref(false);
@@ -326,6 +350,7 @@ const showProcessMessages = ref(false);
 const currentPlan = ref<AgentPlanResponse | null>(null);
 const currentSocket = ref<WebSocket | null>(null);
 const currentAssistantMessageId = ref<string | null>(null);
+const currentAssistantMessageSessionId = ref<number | null>(null);
 const messagesContainerRef = ref<HTMLElement | null>(null);
 const renameModalVisible = ref(false);
 const renameSessionId = ref<number | null>(null);
@@ -337,6 +362,7 @@ const chatSidebarCollapsed = ref(readStoredBoolean(CHAT_SIDEBAR_COLLAPSED_KEY, f
 const agentSidebarCollapsed = ref(readStoredBoolean(AGENT_SIDEBAR_COLLAPSED_KEY, false));
 const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-flash';
 const DEFAULT_GLM_MODEL = 'glm-5.2';
+let messagesRequestSeq = 0;
 
 const sessionMenuOptions = [
   { label: '重命名', key: 'rename' },
@@ -396,14 +422,55 @@ const filteredMessages = computed(() => {
   return visibleMessages.filter((message) => message.role === 'user' || message.role === 'assistant');
 });
 
+const isDemoExperience = computed(() => route.query.demo === '1' || Boolean(authStore.currentUser?.demo));
+const showDemoQuestions = computed(() => isDemoExperience.value && !sending.value && filteredMessages.value.length === 0);
+
 onMounted(async () => {
+  applyMobileChatDefaults();
   await Promise.all([loadSettings(), loadSkills()]);
+  await loadDemoConfigIfNeeded();
   await loadSessions();
+  applyQuestionFromRoute();
 });
 
 onBeforeUnmount(() => {
   currentSocket.value?.close();
 });
+
+async function loadDemoConfigIfNeeded() {
+  if (!isDemoExperience.value) {
+    return;
+  }
+  try {
+    const { data } = await getDemoConfig();
+    if (data.exampleQuestions?.length) {
+      demoQuestions.value = data.exampleQuestions;
+    }
+  } catch {
+    demoQuestions.value = DEFAULT_DEMO_QUESTIONS;
+  }
+}
+
+function applyQuestionFromRoute() {
+  const queryQuestion = route.query.q;
+  if (typeof queryQuestion === 'string' && queryQuestion.trim()) {
+    useDemoQuestion(queryQuestion);
+  }
+}
+
+function useDemoQuestion(question: string) {
+  draft.value = question;
+  if (question.includes('计划模式') || question.includes('拆成任务')) {
+    planMode.value = true;
+  }
+}
+
+function applyMobileChatDefaults() {
+  if (typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches) {
+    setChatSidebarCollapsed(true);
+    setAgentSidebarCollapsed(true);
+  }
+}
 
 async function loadSettings() {
   try {
@@ -440,22 +507,73 @@ async function loadSessions(selectLatest = true) {
 async function selectSession(sessionId: number) {
   selectedSessionId.value = sessionId;
   currentPlan.value = null;
+  messages.value = messagesBySessionId.value[sessionId] || [];
   const session = sessions.value.find((item) => item.id === sessionId);
   ragDisabled.value = Boolean(session?.ragDisabled);
   if (session?.modelProvider && session?.model) {
     selectedModelKey.value = toModelKey(session.modelProvider, session.model);
   }
-  await reloadCurrentMessages();
+  await reloadCurrentMessages(sessionId);
 }
 
-async function reloadCurrentMessages() {
-  if (!selectedSessionId.value) {
+async function reloadCurrentMessages(sessionId = selectedSessionId.value) {
+  if (!sessionId) {
     messages.value = [];
     return;
   }
-  const { data } = await listMessages(selectedSessionId.value);
-  messages.value = data.map(toViewMessage);
-  await scrollMessagesToBottom();
+  const requestSeq = ++messagesRequestSeq;
+  messagesLoading.value = selectedSessionId.value === sessionId && !messagesBySessionId.value[sessionId]?.length;
+  try {
+    const { data } = await listMessages(sessionId, { limit: 50, view: showProcessMessages.value ? 'all' : 'chat' });
+    const nextMessages = data.map(toViewMessage);
+    setSessionMessages(sessionId, nextMessages);
+    if (selectedSessionId.value === sessionId && requestSeq === messagesRequestSeq) {
+      await scrollMessagesToBottom();
+    }
+  } finally {
+    if (selectedSessionId.value === sessionId && requestSeq === messagesRequestSeq) {
+      messagesLoading.value = false;
+    }
+  }
+}
+
+function setSessionMessages(sessionId: number, nextMessages: ChatMessageView[]) {
+  messagesBySessionId.value = {
+    ...messagesBySessionId.value,
+    [sessionId]: nextMessages,
+  };
+  if (selectedSessionId.value === sessionId) {
+    messages.value = nextMessages;
+  }
+}
+
+function appendSessionMessage(sessionId: number, message: ChatMessageView) {
+  const nextMessages = [...(messagesBySessionId.value[sessionId] || []), message];
+  setSessionMessages(sessionId, nextMessages);
+}
+
+function updateSessionMessage(sessionId: number, localId: string | null, updater: (message: ChatMessageView) => void) {
+  if (!localId) {
+    return;
+  }
+  const currentMessages = messagesBySessionId.value[sessionId] || [];
+  const nextMessages = currentMessages.map((message) => {
+    if (message.localId !== localId) {
+      return message;
+    }
+    const copy = { ...message };
+    updater(copy);
+    return copy;
+  });
+  setSessionMessages(sessionId, nextMessages);
+}
+
+function removeSessionMessage(sessionId: number | null, localId: string | null) {
+  if (!sessionId || !localId) {
+    return;
+  }
+  const nextMessages = (messagesBySessionId.value[sessionId] || []).filter((message) => message.localId !== localId);
+  setSessionMessages(sessionId, nextMessages);
 }
 
 async function handleCreateSession() {
@@ -484,6 +602,7 @@ async function handleSend() {
     return;
   }
 
+  let activeSendSessionId: number | null = null;
   try {
     sending.value = true;
     let sessionId = selectedSessionId.value;
@@ -501,10 +620,11 @@ async function handleSend() {
     } else {
       await ensureActiveSessionModelSynced(sessionId);
     }
+    activeSendSessionId = sessionId;
 
     const content = draft.value.trim();
     draft.value = '';
-    messages.value.push({
+    appendSessionMessage(sessionId, {
       localId: `user-${Date.now()}`,
       role: 'user',
       content,
@@ -512,7 +632,8 @@ async function handleSend() {
 
     const assistantId = `assistant-${Date.now()}`;
     currentAssistantMessageId.value = assistantId;
-    messages.value.push({
+    currentAssistantMessageSessionId.value = sessionId;
+    appendSessionMessage(sessionId, {
       localId: assistantId,
       role: 'assistant',
       content: '',
@@ -527,6 +648,9 @@ async function handleSend() {
     }
   } catch (error: any) {
     removePendingAssistant();
+    if (activeSendSessionId) {
+      await reloadCurrentMessages(activeSendSessionId).catch(() => undefined);
+    }
     ui.message.error(error.response?.data?.message || error.message || '发送失败');
     sending.value = false;
   }
@@ -706,18 +830,26 @@ async function sendWsMessage(sessionId: number, content: string, disableRag: boo
 }
 
 async function appendAssistantChunk(chunk: string) {
-  const target = messages.value.find((item) => item.localId === currentAssistantMessageId.value);
-  if (target) {
-    target.content += chunk;
-    await scrollMessagesToBottom();
+  const sessionId = currentAssistantMessageSessionId.value;
+  if (sessionId && currentAssistantMessageId.value) {
+    updateSessionMessage(sessionId, currentAssistantMessageId.value, (message) => {
+      message.content += chunk;
+    });
+    if (selectedSessionId.value === sessionId) {
+      await scrollMessagesToBottom();
+    }
   }
 }
 
 async function setAssistantContent(content: string) {
-  const target = messages.value.find((item) => item.localId === currentAssistantMessageId.value);
-  if (target) {
-    target.content = content;
-    await scrollMessagesToBottom();
+  const sessionId = currentAssistantMessageSessionId.value;
+  if (sessionId && currentAssistantMessageId.value) {
+    updateSessionMessage(sessionId, currentAssistantMessageId.value, (message) => {
+      message.content = content;
+    });
+    if (selectedSessionId.value === sessionId) {
+      await scrollMessagesToBottom();
+    }
   }
 }
 
@@ -731,9 +863,11 @@ async function scrollMessagesToBottom() {
 }
 
 function attachAssistantNavigation(navigationUrl: string) {
-  const target = messages.value.find((item) => item.localId === currentAssistantMessageId.value);
-  if (target) {
-    target.navigationUrl = navigationUrl;
+  const sessionId = currentAssistantMessageSessionId.value;
+  if (sessionId && currentAssistantMessageId.value) {
+    updateSessionMessage(sessionId, currentAssistantMessageId.value, (message) => {
+      message.navigationUrl = navigationUrl;
+    });
   }
 }
 
@@ -741,8 +875,9 @@ function removePendingAssistant() {
   if (!currentAssistantMessageId.value) {
     return;
   }
-  messages.value = messages.value.filter((item) => item.localId !== currentAssistantMessageId.value);
+  removeSessionMessage(currentAssistantMessageSessionId.value, currentAssistantMessageId.value);
   currentAssistantMessageId.value = null;
+  currentAssistantMessageSessionId.value = null;
 }
 
 async function handleModelChange(value: string) {
@@ -875,12 +1010,12 @@ function replaceSession(session: AgentSessionResponse) {
 async function afterSendFinished(sessionId: number) {
   sending.value = false;
   currentAssistantMessageId.value = null;
-  await reloadCurrentMessages();
+  currentAssistantMessageSessionId.value = null;
+  await reloadCurrentMessages(sessionId);
   const { data } = await listSessions();
   sessions.value = data;
-  selectedSessionId.value = sessionId;
-  const active = sessions.value.find((item) => item.id === sessionId);
-  if (active?.modelProvider && active?.model) {
+  const active = sessions.value.find((item) => item.id === selectedSessionId.value);
+  if (selectedSessionId.value === sessionId && active?.modelProvider && active?.model) {
     selectedModelKey.value = toModelKey(active.modelProvider, active.model);
   }
 }

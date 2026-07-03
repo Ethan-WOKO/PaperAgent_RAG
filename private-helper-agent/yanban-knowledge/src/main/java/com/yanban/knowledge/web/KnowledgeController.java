@@ -5,8 +5,10 @@ import com.yanban.knowledge.service.KnowledgeIngestionService;
 import com.yanban.knowledge.service.KnowledgeSearchResult;
 import com.yanban.knowledge.service.KnowledgeSearchService;
 import com.yanban.knowledge.service.KnowledgeUploadService;
+import com.yanban.core.user.UserAccountPolicy;
 import jakarta.validation.Valid;
 import java.util.List;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -27,21 +29,28 @@ public class KnowledgeController {
     private final KnowledgeSearchService searchService;
     private final KnowledgeUploadService uploadService;
     private final KnowledgeDocumentService documentService;
+    private final ObjectProvider<UserAccountPolicy> accountPolicy;
 
     public KnowledgeController(KnowledgeIngestionService ingestionService,
                                KnowledgeSearchService searchService,
                                KnowledgeUploadService uploadService,
-                               KnowledgeDocumentService documentService) {
+                               KnowledgeDocumentService documentService,
+                               ObjectProvider<UserAccountPolicy> accountPolicy) {
         this.ingestionService = ingestionService;
         this.searchService = searchService;
         this.uploadService = uploadService;
         this.documentService = documentService;
+        this.accountPolicy = accountPolicy;
     }
 
     @PostMapping("/api/v1/kb/documents/simple-upload")
     @ResponseStatus(HttpStatus.CREATED)
     public KbDocumentResponse simpleUpload(@AuthenticationPrincipal(expression = "id") Long userId,
                                            @ModelAttribute SimpleUploadForm form) {
+        UserAccountPolicy policy = accountPolicy.getIfAvailable();
+        if (policy != null && form.file() != null) {
+            policy.assertCanUploadKnowledge(userId, form.file().getSize());
+        }
         return KbDocumentResponse.from(ingestionService.ingestSimple(userId, form.file(), form.isPublic()));
     }
 

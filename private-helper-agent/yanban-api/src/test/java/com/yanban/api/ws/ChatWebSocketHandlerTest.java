@@ -1,5 +1,6 @@
 package com.yanban.api.ws;
 
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
@@ -37,6 +38,7 @@ class ChatWebSocketHandlerTest {
         HashMap<String, Object> attributes = new HashMap<>();
         attributes.put(WebSocketAuthHandshakeInterceptor.ATTR_JWT_USER, new JwtUser(1001L, "alice"));
         when(wsSession.getAttributes()).thenReturn(attributes);
+        when(wsSession.isOpen()).thenReturn(true);
         List<String> outbound = new ArrayList<>();
         Mockito.doAnswer(invocation -> {
             TextMessage msg = invocation.getArgument(0);
@@ -50,5 +52,26 @@ class ChatWebSocketHandlerTest {
         assertThat(outbound.get(0)).contains("\"type\":\"chunk\"").contains("\"content\":\"你\"");
         assertThat(outbound.get(1)).contains("\"type\":\"chunk\"").contains("\"content\":\"好\"");
         assertThat(outbound.get(2)).contains("\"type\":\"done\"").contains("\"finishReason\":\"harness\"");
+    }
+
+    @Test
+    void sendSafeDoesNotPropagateRuntimeWebSocketSendFailure() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper();
+        AgentService agentService = Mockito.mock(AgentService.class);
+        ChatWebSocketHandler handler = new ChatWebSocketHandler(objectMapper, agentService);
+
+        when(agentService.sendMessageStreaming(Mockito.eq(1001L), Mockito.eq(99L), any(), Mockito.<Consumer<String>>any()))
+                .thenThrow(new RuntimeException("Encoding error [MALFORMED[1]]"));
+
+        WebSocketSession wsSession = Mockito.mock(WebSocketSession.class);
+        HashMap<String, Object> attributes = new HashMap<>();
+        attributes.put(WebSocketAuthHandshakeInterceptor.ATTR_JWT_USER, new JwtUser(1001L, "alice"));
+        when(wsSession.getAttributes()).thenReturn(attributes);
+        when(wsSession.isOpen()).thenReturn(true);
+        Mockito.doThrow(new IllegalStateException("TEXT_PARTIAL_WRITING"))
+                .when(wsSession).sendMessage(any(TextMessage.class));
+
+        assertThatCode(() -> handler.handleTextMessage(wsSession, new TextMessage("{\"sessionId\":99,\"content\":\"你好\"}")))
+                .doesNotThrowAnyException();
     }
 }

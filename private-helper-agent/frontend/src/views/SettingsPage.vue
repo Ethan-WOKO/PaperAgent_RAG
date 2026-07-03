@@ -9,9 +9,13 @@
         </div>
         <NSpace align="center">
           <span class="chat-hint">Last updated: {{ updatedAtText }}</span>
-          <NButton type="primary" :loading="saving" @click="handleSave">Save settings</NButton>
+          <NButton type="primary" :loading="saving" :disabled="isDemoUser" @click="handleSave">Save settings</NButton>
         </NSpace>
       </section>
+
+      <NAlert v-if="isDemoUser" type="info" class="settings-demo-alert" title="Demo 账号为只读配置">
+        游客体验可以使用预置模型和样本文档，但不能修改 API Key、模型、MCP、Skills 或自定义模型。
+      </NAlert>
 
       <NForm :model="form" label-placement="top">
         <NSpace vertical size="large">
@@ -32,7 +36,7 @@
                     <NTag :type="deepseekConfigured ? 'success' : 'warning'" round>
                       {{ deepseekConfigured ? 'API key configured' : 'API key missing' }}
                     </NTag>
-                    <NButton size="small" secondary :loading="refreshingProvider === 'deepseek'" @click="handleRefreshModels('deepseek')">
+                    <NButton size="small" secondary :loading="refreshingProvider === 'deepseek'" :disabled="isDemoUser" @click="handleRefreshModels('deepseek')">
                       Refresh models
                     </NButton>
                   </div>
@@ -66,7 +70,7 @@
                     <NTag :type="glmConfigured ? 'success' : 'warning'" round>
                       {{ glmConfigured ? 'API key configured' : 'API key missing' }}
                     </NTag>
-                    <NButton size="small" secondary :loading="refreshingProvider === 'glm'" @click="handleRefreshModels('glm')">
+                    <NButton size="small" secondary :loading="refreshingProvider === 'glm'" :disabled="isDemoUser" @click="handleRefreshModels('glm')">
                       Sync catalog
                     </NButton>
                   </div>
@@ -206,7 +210,7 @@
               <div class="section-title">Custom Models</div>
             </template>
             <template #header-extra>
-              <NButton size="small" type="primary" @click="openCreateModelModal">+ 添加模型</NButton>
+              <NButton size="small" type="primary" :disabled="isDemoUser" @click="openCreateModelModal">+ 添加模型</NButton>
             </template>
             <div class="settings-skill-grid">
               <NEmpty v-if="customModels.filter((m) => !m.builtin).length === 0" description="尚未添加自定义模型。点击右上角添加。" />
@@ -221,8 +225,8 @@
                     {{ model.apiKeyConfigured ? 'Key set' : 'Key missing' }}
                   </NTag>
                   <NButton size="small" :loading="testingModelId === model.id" @click="handleTestModel(model)">测试</NButton>
-                  <NButton size="small" secondary @click="openEditModelModal(model)">编辑</NButton>
-                  <NButton size="small" tertiary type="error" @click="handleDeleteModel(model)">删除</NButton>
+                  <NButton size="small" secondary :disabled="isDemoUser" @click="openEditModelModal(model)">编辑</NButton>
+                  <NButton size="small" tertiary type="error" :disabled="isDemoUser" @click="handleDeleteModel(model)">删除</NButton>
                 </NSpace>
               </article>
             </div>
@@ -255,7 +259,7 @@
           </NFormItem>
           <NSpace justify="end">
             <NButton @click="modelModalVisible = false">取消</NButton>
-            <NButton type="primary" @click="handleSaveModel">保存</NButton>
+            <NButton type="primary" :disabled="isDemoUser" @click="handleSaveModel">保存</NButton>
           </NSpace>
         </NForm>
       </NModal>
@@ -288,6 +292,7 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import AppLayout from '@/components/AppLayout.vue';
 import { listSkills, type SkillListItemResponse } from '@/api/skills';
 import { getSettings, updateSettings, refreshProviderModels, createModel, updateModel, deleteModel, testModel, type UserModelResponse, type UserSettingsResponse } from '@/api/settings';
+import { useAuthStore } from '@/stores/auth';
 import { ui } from '@/ui';
 
 const DEFAULT_DEEPSEEK_MODELS = ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner'];
@@ -314,6 +319,7 @@ const providerOptions = [
 ];
 
 const saving = ref(false);
+const authStore = useAuthStore();
 const deepseekConfigured = ref(false);
 const glmConfigured = ref(false);
 const githubConfigured = ref(false);
@@ -344,6 +350,7 @@ const testingModelId = ref<number | null>(null);
 const refreshingProvider = ref<string | null>(null);
 
 const disabledSkillsSet = computed(() => new Set(disabledSkills.value));
+const isDemoUser = computed(() => Boolean(authStore.currentUser?.demo));
 const updatedAtText = computed(() => updatedAt.value ? new Date(updatedAt.value).toLocaleString('zh-CN') : 'Never');
 const deepseekModelOptions = computed(() => form.deepseekModels.map((m) => ({ label: m, value: m })));
 const glmModelOptions = computed(() => form.glmModels.map((m) => ({ label: m, value: m })));
@@ -401,6 +408,9 @@ function toggleSkill(skillId: string, enabled: boolean) {
 }
 
 async function handleSave() {
+  if (guardDemoSettings()) {
+    return;
+  }
   saving.value = true;
   try {
     const { data } = await updateSettings({
@@ -428,6 +438,9 @@ async function handleSave() {
 }
 
 async function handleRefreshModels(provider: 'deepseek' | 'glm') {
+  if (guardDemoSettings()) {
+    return;
+  }
   refreshingProvider.value = provider;
   try {
     const { data } = await refreshProviderModels(provider);
@@ -447,6 +460,9 @@ function splitLines(value: string) {
 // ===== Custom model management =====
 
 function openCreateModelModal() {
+  if (guardDemoSettings()) {
+    return;
+  }
   editingModelId.value = null;
   modelForm.label = '';
   modelForm.apiUrl = '';
@@ -456,6 +472,9 @@ function openCreateModelModal() {
 }
 
 function openEditModelModal(model: UserModelResponse) {
+  if (guardDemoSettings()) {
+    return;
+  }
   editingModelId.value = model.id;
   modelForm.label = model.label;
   modelForm.apiUrl = model.apiUrl || '';
@@ -465,6 +484,9 @@ function openEditModelModal(model: UserModelResponse) {
 }
 
 async function handleSaveModel() {
+  if (guardDemoSettings()) {
+    return;
+  }
   if (!modelForm.label || !modelForm.apiUrl || !modelForm.modelName) {
     ui.message.warning('请填写模型名称、API 地址和模型 ID');
     return;
@@ -491,6 +513,9 @@ async function handleSaveModel() {
 }
 
 async function handleDeleteModel(model: UserModelResponse) {
+  if (guardDemoSettings()) {
+    return;
+  }
   try {
     await deleteModel(model.id);
     ui.message.success('模型已删除');
@@ -514,5 +539,13 @@ async function handleTestModel(model: UserModelResponse) {
   } finally {
     testingModelId.value = null;
   }
+}
+
+function guardDemoSettings() {
+  if (!isDemoUser.value) {
+    return false;
+  }
+  ui.message.info('Demo 账号不能修改配置');
+  return true;
 }
 </script>

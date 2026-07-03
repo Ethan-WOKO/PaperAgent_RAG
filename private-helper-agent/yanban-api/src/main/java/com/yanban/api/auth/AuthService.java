@@ -3,6 +3,7 @@ package com.yanban.api.auth;
 import com.yanban.api.invite.InviteCode;
 import com.yanban.api.invite.InviteCodeProperties;
 import com.yanban.api.invite.InviteCodeRepository;
+import com.yanban.api.demo.DemoAccountService;
 import com.yanban.api.security.JwtService;
 import com.yanban.api.security.JwtUser;
 import com.yanban.api.user.SysUser;
@@ -23,17 +24,20 @@ public class AuthService {
     private final JwtService jwtService;
     private final InviteCodeRepository inviteCodeRepository;
     private final InviteCodeProperties inviteCodeProperties;
+    private final DemoAccountService demoAccountService;
 
     public AuthService(SysUserRepository users,
                        PasswordEncoder passwordEncoder,
                        JwtService jwtService,
                        InviteCodeRepository inviteCodeRepository,
-                       InviteCodeProperties inviteCodeProperties) {
+                       InviteCodeProperties inviteCodeProperties,
+                       DemoAccountService demoAccountService) {
         this.users = users;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
         this.inviteCodeRepository = inviteCodeRepository;
         this.inviteCodeProperties = inviteCodeProperties;
+        this.demoAccountService = demoAccountService;
     }
 
     @Transactional
@@ -62,6 +66,12 @@ public class AuthService {
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "用户名或密码错误");
         }
+        return tokensFor(user.getId(), user.getUsername());
+    }
+
+    @Transactional
+    public AuthResponse demoLogin() {
+        SysUser user = demoAccountService.ensureDemoUserReady();
         return tokensFor(user.getId(), user.getUsername());
     }
 

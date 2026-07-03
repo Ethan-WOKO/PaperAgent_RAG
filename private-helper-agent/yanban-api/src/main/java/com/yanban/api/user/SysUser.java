@@ -25,6 +25,9 @@ public class SysUser {
     @Column(name = "invite_code_id")
     private Long inviteCodeId;
 
+    @Column(name = "account_type", nullable = false, length = 32)
+    private String accountType = "NORMAL";
+
     @Column(name = "created_at", nullable = false, updatable = false, insertable = false)
     private Instant createdAt;
 
@@ -37,12 +40,21 @@ public class SysUser {
     public SysUser(String username, String passwordHash) {
         this.username = username;
         this.passwordHash = passwordHash;
+        this.accountType = "NORMAL";
     }
 
     public SysUser(String username, String passwordHash, Long inviteCodeId) {
         this.username = username;
         this.passwordHash = passwordHash;
         this.inviteCodeId = inviteCodeId;
+        this.accountType = "NORMAL";
+    }
+
+    public SysUser(String username, String passwordHash, Long inviteCodeId, String accountType) {
+        this.username = username;
+        this.passwordHash = passwordHash;
+        this.inviteCodeId = inviteCodeId;
+        this.accountType = accountType == null || accountType.isBlank() ? "NORMAL" : accountType;
     }
 
     public Long getId() {
@@ -59,6 +71,14 @@ public class SysUser {
 
     public Long getInviteCodeId() {
         return inviteCodeId;
+    }
+
+    public String getAccountType() {
+        return accountType;
+    }
+
+    public void setAccountType(String accountType) {
+        this.accountType = accountType == null || accountType.isBlank() ? "NORMAL" : accountType;
     }
 
     public Instant getCreatedAt() {

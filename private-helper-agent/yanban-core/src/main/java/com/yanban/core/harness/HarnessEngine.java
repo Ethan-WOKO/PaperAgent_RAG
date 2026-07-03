@@ -25,6 +25,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.util.StringUtils;
@@ -33,9 +35,17 @@ public class HarnessEngine {
 
     private static final Logger log = LoggerFactory.getLogger(HarnessEngine.class);
     private static final int TOOL_PROTOCOL_PREVIEW_LIMIT = 240;
+    private static final int STREAM_GUARD_RELEASE_CHARS = 160;
+    private static final int STREAM_GUARD_TRAILING_CHARS = 48;
     private static final int DEFAULT_MAX_TOOL_CALLS = 6;
     private static final int DEFAULT_MAX_DUPLICATE_TOOL_CALLS = 3;
     private static final int DEFAULT_RAG_TOP_K = 5;
+    private static final Pattern DSML_INVOKE_PATTERN = Pattern.compile(
+            "(?is)<\\s*\\|\\|dsml\\|\\|\\s*invoke\\s+name\\s*=\\s*[\"']([^\"']+)[\"']\\s*>(.*?)</\\s*\\|\\|dsml\\|\\|\\s*invoke\\s*>"
+    );
+    private static final Pattern DSML_PARAMETER_PATTERN = Pattern.compile(
+            "(?is)<\\s*\\|\\|dsml\\|\\|\\s*parameter\\s+name\\s*=\\s*[\"']([^\"']+)[\"'](?:\\s+string\\s*=\\s*[\"']([^\"']+)[\"'])?\\s*>(.*?)</\\s*\\|\\|dsml\\|\\|\\s*parameter\\s*>"
+    );
     private static final List<String> CURRENT_INFO_KEYWORDS = List.of(
             "最新", "当前", "现在", "最近", "今日", "今天", "实时", "新闻", "发布",
             "latest", "current", "recent", "today", "now", "news", "released", "release"
@@ -130,10 +140,11 @@ public class HarnessEngine {
             }
 
             List<ToolSpec> visibleTools = toolRegistry.listToolsForModel(allowedTools);
+            List<ChatMessage> modelMessages = messagesForModel(messages, visibleTools);
             ChatRequest chatRequest = new ChatRequest(
                     request.provider(),
                     request.model(),
-                    List.copyOf(messages),
+                    List.copyOf(modelMessages),
                     request.temperature(),
                     request.maxTokens(),
                     visibleTools.isEmpty() ? null : visibleTools,
@@ -145,6 +156,33 @@ public class HarnessEngine {
             );
             ChatResponse response = callModel(request, chatRequest, "agent_step", tokenConsumer);
             ChatMessage assistantMessage = suppressToolCallPreamble(response == null ? null : response.message());
+            if (isPseudoToolOutput(assistantMessage)) {
+                List<ToolCall> pseudoToolCalls = parsePseudoToolCalls(assistantMessage.content(), visibleTools);
+                if (!pseudoToolCalls.isEmpty()) {
+                    assistantMessage = new ChatMessage("assistant", null, pseudoToolCalls, null);
+                } else {
+                    log.warn("Harness blocked pseudo tool-call text provider={} step={} contentPreview={} traceId={}",
+                            request.provider(),
+                            steps + 1,
+                            abbreviate(assistantMessage.content()),
+                            request.traceId());
+                    response = retryAfterPseudoToolOutput(request, messages, visibleTools, tokenConsumer);
+                    assistantMessage = suppressToolCallPreamble(response == null ? null : response.message());
+                    pseudoToolCalls = parsePseudoToolCalls(assistantMessage == null ? null : assistantMessage.content(), visibleTools);
+                    if (!pseudoToolCalls.isEmpty()) {
+                        assistantMessage = new ChatMessage("assistant", null, pseudoToolCalls, null);
+                    } else if (isPseudoToolOutput(assistantMessage)) {
+                        String error = "Model returned pseudo tool-call text after retry";
+                        log.warn("{} provider={} step={} contentPreview={} traceId={}",
+                                error,
+                                request.provider(),
+                                steps + 1,
+                                abbreviate(assistantMessage == null ? null : assistantMessage.content()),
+                                request.traceId());
+                        return HarnessResult.failure(error, messages, steps + 1);
+                    }
+                }
+            }
             messages.add(assistantMessage);
 
             if (chatRequest.tools() != null && !chatRequest.tools().isEmpty()) {
@@ -279,37 +317,76 @@ public class HarnessEngine {
                                      Consumer<String> tokenConsumer,
                                      boolean streamTokensImmediately) {
         StringBuilder content = new StringBuilder();
+        StringBuilder pendingStream = new StringBuilder();
         Map<Integer, StreamingToolCallBuilder> toolCallBuilders = new LinkedHashMap<>();
         String[] finishReason = new String[1];
-        modelProvider.streamChat(chatRequest)
-                .doOnNext(chunk -> {
-                    if (chunk == null) {
-                        return;
-                    }
-                    if (chunk.content() != null && !chunk.content().isEmpty()) {
-                        content.append(chunk.content());
-                        if (streamTokensImmediately) {
-                            tokenConsumer.accept(chunk.content());
+        boolean[] streamReleased = new boolean[1];
+        boolean[] streamSuppressed = new boolean[1];
+        boolean[] streamEmitted = new boolean[1];
+        try {
+            modelProvider.streamChat(chatRequest)
+                    .doOnNext(chunk -> {
+                        if (chunk == null) {
+                            return;
                         }
-                    }
-                    for (ChatChunk.ToolCallDelta delta : chunk.toolCallDeltas()) {
-                        toolCallBuilders
-                                .computeIfAbsent(delta.index(), StreamingToolCallBuilder::new)
-                                .append(delta);
-                    }
-                    if (chunk.done()) {
-                        finishReason[0] = chunk.finishReason();
-                    }
-                })
-                .blockLast();
+                        if (chunk.content() != null && !chunk.content().isEmpty()) {
+                            content.append(chunk.content());
+                            if (streamTokensImmediately) {
+                                pendingStream.append(chunk.content());
+                                String pending = pendingStream.toString();
+                                if (looksLikePseudoToolCall(pending) || looksLikeToolSearchPreamble(pending)) {
+                                    streamSuppressed[0] = true;
+                                    pendingStream.setLength(0);
+                                } else if (!streamSuppressed[0] && !streamReleased[0] && shouldReleaseBufferedStream(pending)) {
+                                    emitToken(tokenConsumer, pending, streamEmitted);
+                                    pendingStream.setLength(0);
+                                    streamReleased[0] = true;
+                                } else if (!streamSuppressed[0] && streamReleased[0] && pendingStream.length() > STREAM_GUARD_TRAILING_CHARS) {
+                                    int flushLength = pendingStream.length() - STREAM_GUARD_TRAILING_CHARS;
+                                    emitToken(tokenConsumer, pendingStream.substring(0, flushLength), streamEmitted);
+                                    pendingStream.delete(0, flushLength);
+                                }
+                            }
+                        }
+                        for (ChatChunk.ToolCallDelta delta : chunk.toolCallDeltas()) {
+                            toolCallBuilders
+                                    .computeIfAbsent(delta.index(), StreamingToolCallBuilder::new)
+                                    .append(delta);
+                        }
+                        if (chunk.done()) {
+                            finishReason[0] = chunk.finishReason();
+                        }
+                    })
+                    .blockLast();
+        } catch (RuntimeException ex) {
+            if (!streamEmitted[0] && isStreamDecodingFailure(ex)) {
+                log.warn("Harness stream decoding failed before emitting tokens; falling back to non-streaming model call provider={} model={} error={}",
+                        chatRequest.provider(),
+                        chatRequest.model(),
+                        blankToDefault(ex.getMessage(), ex.getClass().getSimpleName()));
+                return fallbackToNonStreaming(chatRequest, tokenConsumer);
+            }
+            throw ex;
+        }
 
         List<ToolCall> toolCalls = toolCallBuilders.values().stream()
                 .map(StreamingToolCallBuilder::build)
                 .filter(java.util.Objects::nonNull)
                 .toList();
         String assistantContent = toolCalls.isEmpty() && content.length() > 0 ? content.toString() : null;
-        if (!streamTokensImmediately && toolCalls.isEmpty() && assistantContent != null) {
-            tokenConsumer.accept(assistantContent);
+        if (streamTokensImmediately
+                && !streamSuppressed[0]
+                && pendingStream.length() > 0
+                && !looksLikePseudoToolCall(assistantContent)
+                && !looksLikeToolSearchPreamble(assistantContent)) {
+            emitToken(tokenConsumer, pendingStream.toString(), streamEmitted);
+        }
+        if (!streamTokensImmediately
+                && toolCalls.isEmpty()
+                && assistantContent != null
+                && !looksLikePseudoToolCall(assistantContent)
+                && !looksLikeToolSearchPreamble(assistantContent)) {
+            emitToken(tokenConsumer, assistantContent, streamEmitted);
         }
         return new ChatResponse(
                 new ChatMessage(
@@ -321,6 +398,130 @@ public class HarnessEngine {
                 finishReason[0],
                 null
         );
+    }
+
+    private ChatResponse fallbackToNonStreaming(ChatRequest chatRequest,
+                                                Consumer<String> tokenConsumer) {
+        ChatResponse response = modelProvider.chat(chatRequest);
+        ChatMessage message = response == null ? null : response.message();
+        List<ToolCall> toolCalls = message == null ? null : message.toolCalls();
+        String content = message == null ? null : message.content();
+        boolean hasToolCalls = toolCalls != null && !toolCalls.isEmpty();
+        if (!hasToolCalls
+                && StringUtils.hasText(content)
+                && !looksLikePseudoToolCall(content)
+                && !looksLikeToolSearchPreamble(content)) {
+            boolean[] emitted = new boolean[1];
+            emitToken(tokenConsumer, content, emitted);
+        }
+        return response;
+    }
+
+    private void emitToken(Consumer<String> tokenConsumer, String token, boolean[] emitted) {
+        if (token == null || token.isEmpty()) {
+            return;
+        }
+        tokenConsumer.accept(token);
+        emitted[0] = true;
+    }
+
+    private boolean isStreamDecodingFailure(Throwable ex) {
+        Throwable current = ex;
+        while (current != null) {
+            String message = current.getMessage();
+            if (message != null) {
+                String normalized = message.toLowerCase(Locale.ROOT);
+                if (normalized.contains("encoding error")
+                        || normalized.contains("malformed")
+                        || normalized.contains("invalid utf")
+                        || normalized.contains("character coding")) {
+                    return true;
+                }
+            }
+            String className = current.getClass().getName().toLowerCase(Locale.ROOT);
+            if (className.contains("malformedinputexception")
+                    || className.contains("charactercodingexception")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private List<ChatMessage> messagesForModel(List<ChatMessage> messages, List<ToolSpec> visibleTools) {
+        if (visibleTools != null && !visibleTools.isEmpty()) {
+            return withSystemInstruction(messages, toolProtocolInstruction(visibleTools));
+        }
+        return withSystemInstruction(messages, noToolAvailableInstruction());
+    }
+
+    private List<ChatMessage> withSystemInstruction(List<ChatMessage> messages, String instruction) {
+        List<ChatMessage> guarded = new ArrayList<>();
+        int insertAt = 0;
+        while (insertAt < messages.size() && "system".equals(messages.get(insertAt).role())) {
+            guarded.add(messages.get(insertAt));
+            insertAt++;
+        }
+        guarded.add(ChatMessage.system(instruction));
+        guarded.addAll(messages.subList(insertAt, messages.size()));
+        return guarded;
+    }
+
+    private String toolProtocolInstruction(List<ToolSpec> visibleTools) {
+        String toolNames = String.join(", ", extractToolNames(visibleTools));
+        return """
+                Tool output contract for this turn:
+                - Available tools: %s.
+                - If a tool is needed, use the API structured tool_calls field only.
+                - If no tool is needed, answer directly in natural language.
+                - Valid text example: "Here is the answer..."
+                - Invalid visible text examples: <||DSML||tool_calls>, {"tool_calls":[...]}, <invoke name="search_web">, or "I will search first."
+                - Never expose XML, JSON, DSML, invoke tags, function-call syntax, tool ids, or other internal protocol text to the user.
+                """.formatted(toolNames);
+    }
+
+    private String noToolAvailableInstruction() {
+        return """
+                No tools are available in this turn.
+                Do not claim that you will search, browse, call a tool, or retrieve external information.
+                Do not output tool-call markup, XML, JSON, DSML, function-call syntax, or internal protocol text.
+                Valid output example: "Here is the answer..."
+                Invalid output examples: <||DSML||tool_calls>, {"tool_calls":[...]}, <invoke name="search_web">, or "I will search first."
+                Answer the user's question directly in natural language using general knowledge, prior conversation context, preloaded evidence, or tool results already present in the messages.
+                If reliable external evidence would be required and no evidence is already present, say so briefly.
+                """;
+    }
+
+    private ChatResponse retryAfterPseudoToolOutput(HarnessRequest request,
+                                                    List<ChatMessage> messages,
+                                                    List<ToolSpec> visibleTools,
+                                                    Consumer<String> tokenConsumer) {
+        List<ChatMessage> retryMessages = new ArrayList<>(messages);
+        retryMessages.add(ChatMessage.system("""
+                Your previous response attempted to expose an internal tool-call protocol as visible text.
+                That is invalid.
+                Rewrite the response into exactly one valid output shape:
+                1. Natural-language final answer visible to the user.
+                2. API structured tool_calls, if tools are provided by this request and a tool is truly needed.
+                Do not output XML, JSON, DSML, tool_calls text, invoke tags, function-call syntax, or internal protocol text.
+                Invalid examples: <||DSML||tool_calls>, {"tool_calls":[...]}, <invoke name="search_web">, "I will search first."
+                If tools are provided by the API request, call them only through structured tool_calls.
+                If no tools are provided, answer directly in natural language and do not say you searched or retrieved external information.
+                """));
+        ChatRequest retryRequest = new ChatRequest(
+                request.provider(),
+                request.model(),
+                List.copyOf(retryMessages),
+                request.temperature(),
+                request.maxTokens(),
+                visibleTools == null || visibleTools.isEmpty() ? null : visibleTools,
+                request.apiKey(),
+                request.apiUrl(),
+                null,
+                null,
+                request.traceId()
+        );
+        return callModel(request, retryRequest, "pseudo_tool_retry", tokenConsumer);
     }
 
     private ChatMessage suppressToolCallPreamble(ChatMessage message) {
@@ -454,17 +655,138 @@ public class HarnessEngine {
                 .toList();
     }
 
+    private boolean isPseudoToolOutput(ChatMessage message) {
+        return message != null
+                && (message.toolCalls() == null || message.toolCalls().isEmpty())
+                && (looksLikePseudoToolCall(message.content()) || looksLikeToolSearchPreamble(message.content()));
+    }
+
+    private List<ToolCall> parsePseudoToolCalls(String content, List<ToolSpec> visibleTools) {
+        if (content == null || content.isBlank() || visibleTools == null || visibleTools.isEmpty()) {
+            return List.of();
+        }
+        Set<String> visibleToolNames = new LinkedHashSet<>(extractToolNames(visibleTools));
+        String normalized = normalizePseudoToolProtocol(content);
+        Matcher invokeMatcher = DSML_INVOKE_PATTERN.matcher(normalized);
+        List<ToolCall> calls = new ArrayList<>();
+        int index = 0;
+        while (invokeMatcher.find()) {
+            String toolName = invokeMatcher.group(1) == null ? "" : invokeMatcher.group(1).trim();
+            if (!visibleToolNames.contains(toolName)) {
+                continue;
+            }
+            ObjectNode arguments = objectMapper.createObjectNode();
+            Matcher parameterMatcher = DSML_PARAMETER_PATTERN.matcher(invokeMatcher.group(2));
+            while (parameterMatcher.find()) {
+                putPseudoToolArgument(
+                        arguments,
+                        parameterMatcher.group(1),
+                        parameterMatcher.group(2),
+                        parameterMatcher.group(3)
+                );
+            }
+            calls.add(new ToolCall("pseudo_tool_call_" + (++index), "function", new ToolCall.FunctionCall(toolName, arguments.toString())));
+        }
+        if (!calls.isEmpty()) {
+            log.info("Harness converted pseudo tool-call text to structured calls tools={}", calls.stream()
+                    .map(call -> call.function() == null ? "<unknown>" : call.function().name())
+                    .toList());
+        }
+        return calls;
+    }
+
+    private String normalizePseudoToolProtocol(String content) {
+        return content
+                .replace('\uff5c', '|')
+                .replace('\u201c', '"')
+                .replace('\u201d', '"')
+                .replace('\u2018', '\'')
+                .replace('\u2019', '\'');
+    }
+
+    private void putPseudoToolArgument(ObjectNode arguments, String rawName, String stringFlag, String rawValue) {
+        if (!StringUtils.hasText(rawName)) {
+            return;
+        }
+        String name = rawName.trim();
+        String value = rawValue == null ? "" : rawValue.trim();
+        boolean forceString = stringFlag == null || Boolean.parseBoolean(stringFlag);
+        if (forceString) {
+            arguments.put(name, value);
+            return;
+        }
+        if ("true".equalsIgnoreCase(value) || "false".equalsIgnoreCase(value)) {
+            arguments.put(name, Boolean.parseBoolean(value));
+            return;
+        }
+        try {
+            arguments.put(name, Integer.parseInt(value));
+            return;
+        } catch (NumberFormatException ignored) {
+            // fall through
+        }
+        try {
+            arguments.put(name, Double.parseDouble(value));
+            return;
+        } catch (NumberFormatException ignored) {
+            // fall through
+        }
+        arguments.put(name, value);
+    }
+
     private boolean looksLikePseudoToolCall(String content) {
         if (content == null || content.isBlank()) {
             return false;
         }
         String normalized = content.toLowerCase();
-        return normalized.contains("<tool_call>")
+        String compact = normalized.replaceAll("\\s+", "");
+        return compact.contains("<||dsml||tool_calls")
+                || compact.contains("</||dsml||tool_calls")
+                || compact.contains("||dsml||invoke")
+                || normalized.contains("<tool_call>")
                 || normalized.contains("</tool_call>")
+                || normalized.contains("<tool_calls")
+                || normalized.contains("</tool_calls")
+                || normalized.contains("<invoke")
+                || normalized.contains("invoke name=")
+                || normalized.contains("parameter name=")
+                || normalized.contains("\"tool_calls\"")
+                || normalized.contains("tool_calls>")
+                || normalized.contains("tool_calls")
+                && (normalized.contains("search_web")
+                || normalized.contains("search_knowledge")
+                || normalized.contains("search_literature")
+                || normalized.contains("function")
+                || normalized.contains("invoke"))
                 || normalized.contains("<path>")
                 || normalized.contains("<arg_key>")
                 || normalized.contains("mcp_fs__")
                 || normalized.contains("filesystem");
+    }
+
+    private boolean looksLikeToolSearchPreamble(String content) {
+        if (content == null || content.isBlank()) {
+            return false;
+        }
+        String normalized = content.toLowerCase(Locale.ROOT);
+        return normalized.contains("我来为您搜索")
+                || normalized.contains("我来搜索")
+                || normalized.contains("我将搜索")
+                || normalized.contains("让我搜索")
+                || normalized.contains("先搜索")
+                || normalized.contains("搜索权威")
+                || normalized.contains("检索权威")
+                || normalized.contains("i will search")
+                || normalized.contains("let me search")
+                || normalized.contains("i'll search")
+                || normalized.contains("search authoritative");
+    }
+
+    private boolean shouldReleaseBufferedStream(String pending) {
+        if (!StringUtils.hasText(pending)) {
+            return false;
+        }
+        return pending.length() >= STREAM_GUARD_RELEASE_CHARS || pending.contains("\n\n");
     }
 
     private String abbreviate(String content) {

@@ -1,5 +1,6 @@
 package com.yanban.knowledge.service;
 
+import com.yanban.core.user.UserAccountPolicy;
 import com.yanban.knowledge.config.KnowledgeStorageProperties;
 import com.yanban.knowledge.domain.KbChunkRepository;
 import com.yanban.knowledge.domain.KbDocument;
@@ -9,6 +10,7 @@ import com.yanban.knowledge.web.KbDocumentPreviewResponse;
 import io.minio.MinioClient;
 import io.minio.RemoveObjectArgs;
 import java.util.List;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -23,17 +25,20 @@ public class KnowledgeDocumentService {
     private final KnowledgeIndexService indexService;
     private final MinioClient minioClient;
     private final KnowledgeStorageProperties storageProperties;
+    private final ObjectProvider<UserAccountPolicy> accountPolicy;
 
     public KnowledgeDocumentService(KbDocumentRepository documents,
                                     KbChunkRepository chunks,
                                     KnowledgeIndexService indexService,
                                     MinioClient minioClient,
-                                    KnowledgeStorageProperties storageProperties) {
+                                    KnowledgeStorageProperties storageProperties,
+                                    ObjectProvider<UserAccountPolicy> accountPolicy) {
         this.documents = documents;
         this.chunks = chunks;
         this.indexService = indexService;
         this.minioClient = minioClient;
         this.storageProperties = storageProperties;
+        this.accountPolicy = accountPolicy;
     }
 
     @Transactional(readOnly = true)
@@ -82,6 +87,10 @@ public class KnowledgeDocumentService {
     public void deleteOwnedDocument(Long userId, Long documentId) {
         KbDocument document = documents.findByIdAndUserId(documentId, userId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "知识库文档不存在"));
+        UserAccountPolicy policy = accountPolicy.getIfAvailable();
+        if (policy != null) {
+            policy.assertCanDeleteKnowledgeDocument(userId, document.getSourceType());
+        }
         chunks.deleteByDocumentId(documentId);
         indexService.deleteByDocumentId(documentId);
         removeObjectQuietly(document.getObjectKey());

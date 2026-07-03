@@ -30,6 +30,9 @@ public class KbDocument {
     @Column(name = "is_public", nullable = false)
     private Boolean isPublic;
 
+    @Column(name = "source_type", nullable = false, length = 32)
+    private String sourceType = "USER_UPLOAD";
+
     @Column(name = "object_key", length = 512)
     private String objectKey;
 
@@ -58,6 +61,7 @@ public class KbDocument {
         this.filename = filename;
         this.status = status;
         this.isPublic = isPublic;
+        this.sourceType = "USER_UPLOAD";
     }
 
     public Long getId() { return id; }
@@ -65,6 +69,7 @@ public class KbDocument {
     public String getFilename() { return filename; }
     public String getStatus() { return status; }
     public Boolean getIsPublic() { return isPublic; }
+    public String getSourceType() { return sourceType; }
     public String getObjectKey() { return objectKey; }
     public String getMimeType() { return mimeType; }
     public Long getFileSize() { return fileSize; }
@@ -73,6 +78,7 @@ public class KbDocument {
     public Instant getUpdatedAt() { return updatedAt; }
 
     public void setStatus(String status) { this.status = status; }
+    public void setSourceType(String sourceType) { this.sourceType = sourceType == null || sourceType.isBlank() ? "USER_UPLOAD" : sourceType; }
     public void setObjectKey(String objectKey) { this.objectKey = objectKey; }
     public void setMimeType(String mimeType) { this.mimeType = mimeType; }
     public void setFileSize(Long fileSize) { this.fileSize = fileSize; }

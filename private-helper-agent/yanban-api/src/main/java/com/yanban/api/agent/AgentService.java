@@ -10,6 +10,8 @@ import com.yanban.core.agent.AgentMessage;
 import com.yanban.core.agent.AgentMessageRepository;
 import com.yanban.core.agent.AgentSession;
 import com.yanban.core.agent.AgentSessionRepository;
+import com.yanban.core.agent.AgentTurn;
+import com.yanban.core.agent.AgentTurnRepository;
 import com.yanban.core.harness.HarnessEngine;
 import com.yanban.core.harness.HarnessRequest;
 import com.yanban.core.harness.HarnessResult;
@@ -18,12 +20,17 @@ import com.yanban.core.model.ChatModelProvider;
 import com.yanban.core.model.ChatRequest;
 import com.yanban.core.model.ChatResponse;
 import com.yanban.core.model.ToolCall;
+import com.yanban.core.user.UserAccountPolicy;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,9 +42,14 @@ public class AgentService {
 
     private static final Logger log = LoggerFactory.getLogger(AgentService.class);
     private static final int GENERATED_TITLE_MAX_LENGTH = 40;
+    private static final int DEFAULT_VISIBLE_MESSAGE_LIMIT = 50;
+    private static final int MAX_VISIBLE_MESSAGE_LIMIT = 100;
+    private static final List<String> CHAT_VISIBLE_ROLES = List.of("user", "assistant");
 
     private final AgentSessionRepository sessions;
     private final AgentMessageRepository messages;
+    private final AgentTurnRepository turns;
+    private final AgentMessageCacheService messageCache;
     private final HarnessEngine harnessEngine;
     private final ObjectMapper objectMapper;
     private final UserSettingsService userSettingsService;
@@ -45,18 +57,24 @@ public class AgentService {
     private final SkillsService skillsService;
     private final AgentToolPolicyEngine toolPolicyEngine;
     private final ChatModelProvider titleModelProvider;
+    private final UserAccountPolicy accountPolicy;
 
     public AgentService(AgentSessionRepository sessions,
                         AgentMessageRepository messages,
+                        AgentTurnRepository turns,
+                        AgentMessageCacheService messageCache,
                         HarnessEngine harnessEngine,
                         ObjectMapper objectMapper,
                         UserSettingsService userSettingsService,
                         ConversationIntentRouterService conversationIntentRouterService,
                         SkillsService skillsService,
                         AgentToolPolicyEngine toolPolicyEngine,
-                        @Qualifier("chatModelProvider") ChatModelProvider titleModelProvider) {
+                        @Qualifier("chatModelProvider") ChatModelProvider titleModelProvider,
+                        UserAccountPolicy accountPolicy) {
         this.sessions = sessions;
         this.messages = messages;
+        this.turns = turns;
+        this.messageCache = messageCache;
         this.harnessEngine = harnessEngine;
         this.objectMapper = objectMapper;
         this.userSettingsService = userSettingsService;
@@ -64,6 +82,7 @@ public class AgentService {
         this.skillsService = skillsService;
         this.toolPolicyEngine = toolPolicyEngine;
         this.titleModelProvider = titleModelProvider;
+        this.accountPolicy = accountPolicy;
     }
 
     @Transactional
@@ -78,7 +97,9 @@ public class AgentService {
                 request.maxSteps() == null ? settings.getMaxSteps() : request.maxSteps(),
                 request.ragDisabled() != null ? request.ragDisabled() : !Boolean.TRUE.equals(settings.getRagDefaultEnabled())
         );
-        return AgentSessionResponse.from(sessions.saveAndFlush(session));
+        AgentSession saved = sessions.saveAndFlush(session);
+        messageCache.evictSession(userId, saved.getId());
+        return AgentSessionResponse.from(saved);
     }
 
     @Transactional(readOnly = true)
@@ -121,25 +142,50 @@ public class AgentService {
     @Transactional
     public void deleteSession(Long userId, Long sessionId) {
         AgentSession session = getOwnedSession(userId, sessionId);
+        turns.deleteBySessionId(session.getId());
         messages.deleteBySessionId(session.getId());
+        messageCache.evictSession(userId, session.getId());
         sessions.delete(session);
         sessions.flush();
     }
 
     @Transactional(readOnly = true)
-    public List<AgentMessageResponse> listMessages(Long userId, Long sessionId) {
+    public List<AgentMessageResponse> listMessages(Long userId, Long sessionId, Integer limit, Long beforeId, String view) {
         AgentSession session = getOwnedSession(userId, sessionId);
-        return messages.findBySessionIdOrderByCreatedAtAsc(session.getId()).stream()
+        int safeLimit = safeMessageLimit(limit);
+        boolean chatView = view == null || view.isBlank() || "chat".equalsIgnoreCase(view);
+        if (chatView && beforeId == null) {
+            Optional<List<AgentMessageResponse>> cached = messageCache.getRecentVisibleMessages(userId, session.getId(), safeLimit);
+            if (cached.isPresent()) {
+                return cached.get();
+            }
+        }
+
+        Pageable page = PageRequest.of(0, safeLimit);
+        List<AgentMessage> rows;
+        if (chatView) {
+            rows = beforeId == null
+                    ? messages.findBySessionIdAndRoleInOrderByIdDesc(session.getId(), CHAT_VISIBLE_ROLES, page)
+                    : messages.findBySessionIdAndRoleInAndIdLessThanOrderByIdDesc(session.getId(), CHAT_VISIBLE_ROLES, beforeId, page);
+        } else {
+            rows = beforeId == null
+                    ? messages.findBySessionIdOrderByIdDesc(session.getId(), page)
+                    : messages.findBySessionIdAndIdLessThanOrderByIdDesc(session.getId(), beforeId, page);
+        }
+        Collections.reverse(rows);
+        List<AgentMessageResponse> response = rows.stream()
                 .map(AgentMessageResponse::from)
                 .toList();
+        if (chatView && beforeId == null) {
+            messageCache.putRecentVisibleMessages(userId, session.getId(), response);
+        }
+        return response;
     }
 
-    @Transactional
     public SendMessageResponse sendMessage(Long userId, Long sessionId, SendMessageRequest request) {
         return sendMessageInternal(userId, sessionId, request, null);
     }
 
-    @Transactional
     public SendMessageResponse sendMessageStreaming(Long userId,
                                                     Long sessionId,
                                                     SendMessageRequest request,
@@ -151,21 +197,25 @@ public class AgentService {
                                                     Long sessionId,
                                                     SendMessageRequest request,
                                                     Consumer<String> tokenConsumer) {
+        accountPolicy.assertCanSendChatMessage(userId);
         AgentSession session = getOwnedSession(userId, sessionId);
         List<ChatMessage> history = getHistoryMessages(session.getId());
         boolean shouldAutoGenerateTitle = shouldAutoGenerateTitle(session, history);
 
         UserSettingsService.ModelEndpoint endpoint = userSettingsService.resolveModelEndpoint(
                 userId, session.getModelProviderSnapshot(), session.getModelSnapshot());
+        List<AgentMessage> saved = new ArrayList<>();
+        AgentMessage userMessage = saveAndCacheMessage(session.getId(), userId, ChatMessage.user(request.content()));
+        saved.add(userMessage);
+        AgentTurn turn = createRunningTurn(session.getId(), userId, userMessage.getId());
+
         if (isRuntimeIdentityQuestion(request.content())) {
             String assistantContent = buildRuntimeIdentityAnswer(endpoint);
+            AgentMessage assistantMessage = saveAndCacheMessage(session.getId(), userId, ChatMessage.assistant(assistantContent));
+            saved.add(assistantMessage);
+            completeTurn(turn, assistantMessage.getId());
             emitToken(tokenConsumer, assistantContent);
-            List<AgentMessage> saved = new ArrayList<>();
-            saved.add(messages.save(toAgentMessage(session.getId(), userId, ChatMessage.user(request.content()))));
-            saved.add(messages.save(toAgentMessage(session.getId(), userId, ChatMessage.assistant(assistantContent))));
-            messages.flush();
-            session.touch();
-            sessions.saveAndFlush(session);
+            touchAndMaybeGenerateTitle(session, userId, request.content(), shouldAutoGenerateTitle);
             return new SendMessageResponse(
                     true,
                     assistantContent,
@@ -178,11 +228,10 @@ public class AgentService {
 
         ConversationIntentRouterService.IntentAction intentAction = conversationIntentRouterService.route(request.content());
         if (intentAction != null) {
+            AgentMessage assistantMessage = saveAndCacheMessage(session.getId(), userId, ChatMessage.assistant(intentAction.assistantMessage()));
+            saved.add(assistantMessage);
+            completeTurn(turn, assistantMessage.getId());
             emitToken(tokenConsumer, intentAction.assistantMessage());
-            List<AgentMessage> saved = new ArrayList<>();
-            saved.add(messages.save(toAgentMessage(session.getId(), userId, ChatMessage.user(request.content()))));
-            saved.add(messages.save(toAgentMessage(session.getId(), userId, ChatMessage.assistant(intentAction.assistantMessage()))));
-            messages.flush();
             touchAndMaybeGenerateTitle(session, userId, request.content(), shouldAutoGenerateTitle);
             return new SendMessageResponse(
                     true,
@@ -209,49 +258,174 @@ public class AgentService {
                 endpoint.modelName(),
                 toolPolicy.allowedTools(),
                 toolPolicy.reason());
-        List<ChatMessage> effectiveHistory = withRuntimeIdentityGuard(history, endpoint);
-        HarnessResult result = harnessEngine.run(new HarnessRequest(
-                effectiveHistory,
-                userId,
-                request.content(),
-                endpoint.providerKey(),
-                endpoint.modelName(),
-                null,
-                null,
-                session.getMaxSteps(),
-                ragDisabled,
-                endpoint.apiKey(),
-                endpoint.apiUrl(),
-                resolvedSkill == null ? null : resolvedSkill.prompt(),
-                toolPolicy.allowedTools(),
-                toolPolicy.maxToolCalls(),
-                toolPolicy.maxDuplicateToolCalls(),
-                null,
-                null
-        ), tokenConsumer);
+        List<ChatMessage> effectiveHistory = withRuntimeIdentityGuard(normalizeHistoryForModel(session.getId(), history), endpoint);
+        try {
+            HarnessResult result = harnessEngine.run(new HarnessRequest(
+                    effectiveHistory,
+                    userId,
+                    request.content(),
+                    endpoint.providerKey(),
+                    endpoint.modelName(),
+                    null,
+                    null,
+                    session.getMaxSteps(),
+                    ragDisabled,
+                    endpoint.apiKey(),
+                    endpoint.apiUrl(),
+                    resolvedSkill == null ? null : resolvedSkill.prompt(),
+                    toolPolicy.allowedTools(),
+                    toolPolicy.maxToolCalls(),
+                    toolPolicy.maxDuplicateToolCalls(),
+                    null,
+                    null
+            ), tokenConsumer);
 
-        List<ChatMessage> newChatMessages = result.messages().subList(effectiveHistory.size(), result.messages().size());
-        List<AgentMessage> saved = new ArrayList<>();
-        for (ChatMessage chatMessage : newChatMessages) {
-            saved.add(messages.save(toAgentMessage(session.getId(), userId, chatMessage)));
+            List<AgentMessage> harnessMessages = saveHarnessMessages(
+                    session.getId(),
+                    userId,
+                    result.messages(),
+                    effectiveHistory.size()
+            );
+            saved.addAll(harnessMessages);
+
+            if (result.success()) {
+                completeTurn(turn, lastAssistantMessageId(harnessMessages));
+                touchAndMaybeGenerateTitle(session, userId, request.content(), shouldAutoGenerateTitle);
+                return new SendMessageResponse(
+                        true,
+                        result.assistantContent(),
+                        result.steps(),
+                        null,
+                        null,
+                        saved.stream().map(AgentMessageResponse::from).toList()
+                );
+            }
+
+            return failTurn(
+                    session,
+                    userId,
+                    turn,
+                    saved,
+                    result.errorMessage(),
+                    result.steps()
+            );
+        } catch (Exception ex) {
+            log.warn("Agent send failed sessionId={} userId={}", session.getId(), userId, ex);
+            return failTurn(session, userId, turn, saved, extractErrorMessage(ex), 0);
         }
-        messages.flush();
-        touchAndMaybeGenerateTitle(session, userId, request.content(), shouldAutoGenerateTitle);
-
-        return new SendMessageResponse(
-                result.success(),
-                result.assistantContent(),
-                result.steps(),
-                result.errorMessage(),
-                null,
-                saved.stream().map(AgentMessageResponse::from).toList()
-        );
     }
 
     private void emitToken(Consumer<String> tokenConsumer, String content) {
         if (tokenConsumer != null && StringUtils.hasText(content)) {
             tokenConsumer.accept(content);
         }
+    }
+
+    private int safeMessageLimit(Integer limit) {
+        if (limit == null) {
+            return DEFAULT_VISIBLE_MESSAGE_LIMIT;
+        }
+        return Math.max(1, Math.min(MAX_VISIBLE_MESSAGE_LIMIT, limit));
+    }
+
+    private AgentTurn createRunningTurn(Long sessionId, Long userId, Long userMessageId) {
+        AgentTurn turn = turns.saveAndFlush(new AgentTurn(sessionId, userId, userMessageId));
+        messageCache.putTurnStatus(turn.getId(), turn.getStatus(), null);
+        return turn;
+    }
+
+    private void completeTurn(AgentTurn turn, Long assistantMessageId) {
+        if (turn == null) {
+            return;
+        }
+        turn.complete(assistantMessageId);
+        turns.saveAndFlush(turn);
+        messageCache.putTurnStatus(turn.getId(), turn.getStatus(), null);
+    }
+
+    private SendMessageResponse failTurn(AgentSession session,
+                                         Long userId,
+                                         AgentTurn turn,
+                                         List<AgentMessage> saved,
+                                         String errorMessage,
+                                         int steps) {
+        String safeError = StringUtils.hasText(errorMessage) ? errorMessage.trim() : "对话处理失败";
+        AgentMessage assistantMessage = saveAndCacheMessage(
+                session.getId(),
+                userId,
+                ChatMessage.assistant("这次回复失败了：" + safeError)
+        );
+        saved.add(assistantMessage);
+        if (turn != null) {
+            turn.fail(assistantMessage.getId(), safeError);
+            turns.saveAndFlush(turn);
+            messageCache.putTurnStatus(turn.getId(), turn.getStatus(), safeError);
+        }
+        session.touch();
+        sessions.saveAndFlush(session);
+        return new SendMessageResponse(
+                false,
+                assistantMessage.getContent(),
+                steps,
+                safeError,
+                null,
+                saved.stream().map(AgentMessageResponse::from).toList()
+        );
+    }
+
+    private List<AgentMessage> saveHarnessMessages(Long sessionId,
+                                                   Long userId,
+                                                   List<ChatMessage> allMessages,
+                                                   int persistedHistorySize) {
+        if (allMessages == null || allMessages.size() <= persistedHistorySize) {
+            return List.of();
+        }
+        List<AgentMessage> saved = new ArrayList<>();
+        for (ChatMessage chatMessage : allMessages.subList(persistedHistorySize, allMessages.size())) {
+            if (!shouldPersistHarnessMessage(chatMessage)) {
+                continue;
+            }
+            saved.add(saveAndCacheMessage(sessionId, userId, chatMessage));
+        }
+        return saved;
+    }
+
+    private boolean shouldPersistHarnessMessage(ChatMessage chatMessage) {
+        if (chatMessage == null || chatMessage.role() == null) {
+            return false;
+        }
+        String role = chatMessage.role().trim().toLowerCase();
+        return "assistant".equals(role) || "tool".equals(role);
+    }
+
+    private Long lastAssistantMessageId(List<AgentMessage> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return null;
+        }
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            AgentMessage message = messages.get(i);
+            if (message != null && "assistant".equalsIgnoreCase(message.getRole())) {
+                return message.getId();
+            }
+        }
+        return null;
+    }
+
+    private AgentMessage saveAndCacheMessage(Long sessionId, Long userId, ChatMessage chatMessage) {
+        AgentMessage saved = messages.saveAndFlush(toAgentMessage(sessionId, userId, chatMessage));
+        messageCache.appendVisibleMessage(userId, sessionId, AgentMessageResponse.from(saved));
+        return saved;
+    }
+
+    private String extractErrorMessage(Throwable ex) {
+        Throwable current = ex;
+        while (current != null) {
+            if (StringUtils.hasText(current.getMessage())) {
+                return current.getMessage();
+            }
+            current = current.getCause();
+        }
+        return "对话处理失败";
     }
 
     @Transactional(readOnly = true)
@@ -269,7 +443,7 @@ public class AgentService {
 
     @Transactional
     public AgentMessage saveMessage(Long sessionId, Long userId, ChatMessage chatMessage) {
-        return messages.saveAndFlush(toAgentMessage(sessionId, userId, chatMessage));
+        return saveAndCacheMessage(sessionId, userId, chatMessage);
     }
 
     private ChatMessage toChatMessage(AgentMessage message) {
@@ -312,6 +486,91 @@ public class AgentService {
         List<ChatMessage> guardedHistory = new ArrayList<>(history);
         guardedHistory.add(ChatMessage.system(buildRuntimeIdentityPrompt(endpoint)));
         return guardedHistory;
+    }
+
+    private List<ChatMessage> normalizeHistoryForModel(Long sessionId, List<ChatMessage> history) {
+        if (history == null || history.isEmpty()) {
+            return List.of();
+        }
+        List<ChatMessage> normalized = new ArrayList<>();
+        int downgraded = 0;
+        for (int i = 0; i < history.size(); i++) {
+            ChatMessage message = history.get(i);
+            if (message == null) {
+                continue;
+            }
+            if (isAssistantToolCallMessage(message)) {
+                int matchingToolCount = matchingFollowingToolCount(history, i, message.toolCalls());
+                if (matchingToolCount > 0) {
+                    normalized.add(message);
+                    for (int offset = 1; offset <= matchingToolCount; offset++) {
+                        ChatMessage toolMessage = history.get(i + offset);
+                        normalized.add(new ChatMessage(toolMessage.role(), toolMessage.content(), null, toolMessage.toolCallId()));
+                    }
+                    i += matchingToolCount;
+                } else {
+                    downgraded++;
+                    addAssistantTextIfPresent(normalized, message.content());
+                    while (i + 1 < history.size() && isToolMessage(history.get(i + 1))) {
+                        i++;
+                        downgraded++;
+                        addDowngradedToolMessage(normalized, history.get(i));
+                    }
+                }
+                continue;
+            }
+            if (isToolMessage(message)) {
+                downgraded++;
+                addDowngradedToolMessage(normalized, message);
+                continue;
+            }
+            normalized.add(new ChatMessage(message.role(), message.content(), null, null));
+        }
+        if (downgraded > 0) {
+            log.info("Agent normalized historical tool messages sessionId={} downgradedMessages={}", sessionId, downgraded);
+        }
+        return normalized;
+    }
+
+    private boolean isAssistantToolCallMessage(ChatMessage message) {
+        return message != null
+                && "assistant".equals(message.role())
+                && message.toolCalls() != null
+                && !message.toolCalls().isEmpty();
+    }
+
+    private boolean isToolMessage(ChatMessage message) {
+        return message != null && "tool".equals(message.role());
+    }
+
+    private int matchingFollowingToolCount(List<ChatMessage> history, int assistantIndex, List<ToolCall> toolCalls) {
+        if (toolCalls == null || toolCalls.isEmpty() || assistantIndex + toolCalls.size() >= history.size()) {
+            return 0;
+        }
+        for (int offset = 0; offset < toolCalls.size(); offset++) {
+            ToolCall toolCall = toolCalls.get(offset);
+            ChatMessage toolMessage = history.get(assistantIndex + 1 + offset);
+            if (toolCall == null
+                    || !StringUtils.hasText(toolCall.id())
+                    || !isToolMessage(toolMessage)
+                    || !toolCall.id().equals(toolMessage.toolCallId())) {
+                return 0;
+            }
+        }
+        return toolCalls.size();
+    }
+
+    private void addDowngradedToolMessage(List<ChatMessage> normalized, ChatMessage toolMessage) {
+        if (toolMessage == null || !StringUtils.hasText(toolMessage.content())) {
+            return;
+        }
+        normalized.add(ChatMessage.assistant("Previous tool result:\n" + toolMessage.content()));
+    }
+
+    private void addAssistantTextIfPresent(List<ChatMessage> normalized, String content) {
+        if (StringUtils.hasText(content)) {
+            normalized.add(ChatMessage.assistant(content));
+        }
     }
 
     private String buildRuntimeIdentityPrompt(UserSettingsService.ModelEndpoint endpoint) {

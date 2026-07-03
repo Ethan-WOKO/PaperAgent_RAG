@@ -2,6 +2,7 @@ package com.yanban.knowledge.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yanban.core.user.UserAccountPolicy;
 import com.yanban.knowledge.config.KnowledgeStorageProperties;
 import com.yanban.knowledge.config.KnowledgeUploadProperties;
 import com.yanban.knowledge.domain.KbChunkUpload;
@@ -27,6 +28,7 @@ import java.util.Locale;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.MediaType;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
@@ -48,6 +50,7 @@ public class KnowledgeUploadService {
     private final KnowledgeUploadProperties uploadProperties;
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
+    private final ObjectProvider<UserAccountPolicy> accountPolicy;
 
     public KnowledgeUploadService(KbChunkUploadRepository chunkUploads,
                                   KbDocumentRepository documents,
@@ -55,7 +58,8 @@ public class KnowledgeUploadService {
                                   KnowledgeStorageProperties storageProperties,
                                   KnowledgeUploadProperties uploadProperties,
                                   KafkaTemplate<String, String> kafkaTemplate,
-                                  ObjectMapper objectMapper) {
+                                  ObjectMapper objectMapper,
+                                  ObjectProvider<UserAccountPolicy> accountPolicy) {
         this.chunkUploads = chunkUploads;
         this.documents = documents;
         this.minioClient = minioClient;
@@ -63,6 +67,7 @@ public class KnowledgeUploadService {
         this.uploadProperties = uploadProperties;
         this.kafkaTemplate = kafkaTemplate;
         this.objectMapper = objectMapper;
+        this.accountPolicy = accountPolicy;
     }
 
     @Transactional
@@ -70,6 +75,10 @@ public class KnowledgeUploadService {
         validateChunkRequest(request);
         try {
             byte[] bytes = request.file().getBytes();
+            UserAccountPolicy policy = accountPolicy.getIfAvailable();
+            if (policy != null) {
+                policy.assertCanUploadKnowledge(userId, bytes.length);
+            }
             validateMd5(request.chunkMd5(), bytes);
 
             String tempObjectKey = buildTempObjectKey(userId, request.uploadId(), request.chunkNumber());
@@ -122,6 +131,11 @@ public class KnowledgeUploadService {
             throw new ResponseStatusException(BAD_REQUEST, "分片数量不完整");
         }
         validateChunkSequence(uploadedChunks, request.totalChunks());
+        UserAccountPolicy policy = accountPolicy.getIfAvailable();
+        if (policy != null) {
+            long totalBytes = uploadedChunks.stream().mapToLong(KbChunkUpload::getChunkSize).sum();
+            policy.assertCanUploadKnowledge(userId, totalBytes);
+        }
 
         Path mergedFile = null;
         try {

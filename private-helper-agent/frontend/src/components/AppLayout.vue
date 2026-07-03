@@ -10,7 +10,9 @@
   >
     <aside class="app-sidebar">
       <div class="app-sidebar__brand" @click="router.push('/chat')">
-        <div class="app-sidebar__logo">✦</div>
+        <div class="app-sidebar__logo">
+          <img src="/logo.png" alt="" />
+        </div>
         <div>
           <div class="app-sidebar__name">ScholarAI</div>
           <div class="app-sidebar__sub">Research Copilot</div>
