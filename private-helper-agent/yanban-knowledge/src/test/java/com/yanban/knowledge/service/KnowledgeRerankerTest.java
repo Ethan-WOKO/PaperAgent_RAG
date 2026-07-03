@@ -65,6 +65,18 @@ class KnowledgeRerankerTest {
     }
 
     @Test
+    void queryVariantsKeepChineseSearchPhrases() {
+        List<String> variants = KnowledgeQueryVariants.expand(
+                "根据演示知识库，这个项目主要解决哪三类科研工作流问题？"
+        );
+
+        assertThat(variants)
+                .contains("根据演示知识库，这个项目主要解决哪三类科研工作流问题")
+                .contains("项目主要解决")
+                .contains("三类科研工作流问题");
+    }
+
+    @Test
     void rerankPromotesLookupTokenCitationOverHigherVectorNoise() {
         KnowledgeSearchResult correctCitation = new KnowledgeSearchResult(
                 1L,

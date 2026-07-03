@@ -40,6 +40,9 @@ public class AgentMessageCacheService {
                 return Optional.empty();
             }
             List<AgentMessageResponse> values = objectMapper.readValue(json, MESSAGE_LIST_TYPE);
+            if (values == null || values.isEmpty()) {
+                return Optional.empty();
+            }
             values.sort(Comparator.comparing(AgentMessageResponse::id));
             return Optional.of(tail(values, limit));
         } catch (Exception ex) {
@@ -54,6 +57,10 @@ public class AgentMessageCacheService {
         }
         try {
             List<AgentMessageResponse> values = tail(visible(messages), MAX_RECENT_MESSAGES);
+            if (values.isEmpty()) {
+                evictSession(userId, sessionId);
+                return;
+            }
             redis.opsForValue().set(recentKey(userId, sessionId), objectMapper.writeValueAsString(values), RECENT_TTL);
         } catch (Exception ex) {
             evictSession(userId, sessionId);

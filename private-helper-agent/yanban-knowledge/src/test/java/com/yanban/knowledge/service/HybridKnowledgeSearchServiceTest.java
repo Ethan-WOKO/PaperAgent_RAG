@@ -103,4 +103,30 @@ class HybridKnowledgeSearchServiceTest {
         assertThat(results.get(0).filename()).isEqualTo("notes.md");
         assertThat(results.get(0).rerankScore()).isNotNull();
     }
+
+    @Test
+    void fallbackSearchUsesChineseVariantWhenEmbeddingFails() {
+        EmbeddingClient embeddingClient = Mockito.mock(EmbeddingClient.class);
+        KnowledgeSearchIndexClient indexClient = Mockito.mock(KnowledgeSearchIndexClient.class);
+        KbDocumentRepository documents = Mockito.mock(KbDocumentRepository.class);
+        KbChunkRepository chunks = Mockito.mock(KbChunkRepository.class);
+        SimpleKnowledgeSearchService fallback = new SimpleKnowledgeSearchService(chunks, documents);
+        HybridKnowledgeSearchService service = new HybridKnowledgeSearchService(embeddingClient, indexClient, documents, fallback);
+
+        String query = "根据演示知识库，这个项目主要解决哪三类科研工作流问题？";
+        when(embeddingClient.embed(query)).thenThrow(new IllegalStateException("embedding down"));
+        com.yanban.knowledge.domain.KbChunk chunk = new com.yanban.knowledge.domain.KbChunk(
+                1L,
+                0,
+                "项目主要解决的三类科研工作流问题：私有资料难复用、文献与证据整理耗时、复杂任务缺少执行轨迹。"
+        );
+        when(chunks.searchAccessibleChunks("项目主要解决", 2002L, PageRequest.of(0, 8))).thenReturn(List.of(chunk));
+        when(documents.findById(1L)).thenReturn(java.util.Optional.of(new KbDocument(2002L, "yanban-demo-project-brief.md", "READY", false)));
+
+        List<KnowledgeSearchResult> results = service.search(query, 2002L, 2);
+
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).chunkText()).contains("私有资料难复用");
+        assertThat(results.get(0).rerankScore()).isNotNull();
+    }
 }

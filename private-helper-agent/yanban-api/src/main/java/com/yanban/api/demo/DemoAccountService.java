@@ -14,6 +14,7 @@ import com.yanban.paper.domain.PaperTaskRepository;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,9 +33,9 @@ public class DemoAccountService {
 
     private static final Logger log = LoggerFactory.getLogger(DemoAccountService.class);
     private static final List<SeedDocument> SEED_DOCUMENTS = List.of(
-            new SeedDocument("yanban-demo-project.md", "demo/kb/yanban-demo-project.md"),
-            new SeedDocument("yanban-demo-rag-notes.md", "demo/kb/yanban-demo-rag-notes.md"),
-            new SeedDocument("yanban-demo-lab-schedule.md", "demo/kb/yanban-demo-lab-schedule.md")
+            new SeedDocument("yanban-demo-project-brief.md", "demo/kb/yanban-demo-project.md"),
+            new SeedDocument("yanban-demo-rag-playbook.md", "demo/kb/yanban-demo-rag-notes.md"),
+            new SeedDocument("yanban-demo-lab-plan.md", "demo/kb/yanban-demo-lab-schedule.md")
     );
 
     private final DemoProperties properties;
@@ -136,10 +137,19 @@ public class DemoAccountService {
     }
 
     private void ensureSeedDocuments(Long userId) {
-        if (documents.countByUserIdAndSourceType(userId, DemoAccessService.SOURCE_TYPE_DEMO_SEED) == SEED_DOCUMENTS.size()) {
+        List<KbDocument> existingSeedDocuments = documents.findByUserIdAndSourceType(
+                userId,
+                DemoAccessService.SOURCE_TYPE_DEMO_SEED
+        );
+        Set<String> existingFilenames = existingSeedDocuments.stream()
+                .map(KbDocument::getFilename)
+                .collect(java.util.stream.Collectors.toSet());
+        boolean upToDate = existingSeedDocuments.size() == SEED_DOCUMENTS.size()
+                && SEED_DOCUMENTS.stream().allMatch(seed -> existingFilenames.contains(seed.filename()));
+        if (upToDate) {
             return;
         }
-        deleteDocuments(documents.findByUserIdAndSourceType(userId, DemoAccessService.SOURCE_TYPE_DEMO_SEED));
+        deleteDocuments(existingSeedDocuments);
         seedDocuments(userId);
     }
 

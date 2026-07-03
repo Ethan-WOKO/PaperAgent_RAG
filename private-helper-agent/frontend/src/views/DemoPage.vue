@@ -74,10 +74,10 @@ import { useAuthStore } from '@/stores/auth';
 import { ui } from '@/ui';
 
 const DEFAULT_QUESTIONS = [
-  '根据知识库，概括这个项目能解决什么问题。',
-  '演示文档里的组会时间、地点和下次 DDL 是什么？',
-  '这个项目的 RAG 流程包含哪些步骤？',
-  '用计划模式帮我把两周内完善 Agent 能力拆成任务。',
+  '根据演示知识库，这个项目主要解决哪三类科研工作流问题？',
+  '演示文档里的组会时间、会议地点和下次 DDL 分别是什么？',
+  '根据 RAG 笔记，系统从文档上传到生成回答经历哪些步骤？',
+  '如果我要在两周内改进 Agent 体验，演示文档建议优先做哪些任务？',
 ];
 
 const router = useRouter();

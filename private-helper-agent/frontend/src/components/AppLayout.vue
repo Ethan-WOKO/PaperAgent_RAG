@@ -39,20 +39,6 @@
         </button>
       </nav>
 
-      <div class="app-sidebar__section">
-        <div class="app-sidebar__section-title">
-          <span>Quick Actions</span>
-        </div>
-        <button type="button" class="app-sidebar__mini-card" @click="router.push('/paper')">
-          <strong>Polish Paper</strong>
-          <small>LaTeX workflow & review</small>
-        </button>
-        <button type="button" class="app-sidebar__mini-card" @click="router.push('/chat')">
-          <strong>Search Literature</strong>
-          <small>/literature topic bibtex</small>
-        </button>
-      </div>
-
       <div class="app-sidebar__spacer" />
 
       <div class="app-sidebar__plan">

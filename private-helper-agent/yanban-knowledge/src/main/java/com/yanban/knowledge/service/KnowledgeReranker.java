@@ -66,9 +66,9 @@ public class KnowledgeReranker {
         double termCoverage = terms.isEmpty() ? 0.0d : (double) matchedTerms.size() / terms.size();
         double filenameMatch = terms.stream().anyMatch(filename::contains) ? 1.0d : 0.0d;
         double positionBonus = candidate.chunkIndex() == null ? 0.0d : 1.0d / (1 + Math.max(0, candidate.chunkIndex()));
-        double rerankScore = candidate.score() * 0.35d
-                + exactPhrase * 2.0d
-                + lookupTokenMatch * 2.0d
+        double rerankScore = candidate.score() * 0.25d
+                + exactPhrase * 3.0d
+                + lookupTokenMatch * 3.0d
                 + termCoverage * 1.5d
                 + filenameMatch * 0.25d
                 + positionBonus * 0.05d;

@@ -32,8 +32,6 @@
             </div>
           </template>
 
-          <div class="chat-sidebar__hint">会话保留模型、RAG 和工具设置。建议按任务主题拆分对话。</div>
-
           <NSpace vertical :size="8">
             <NEmpty v-if="sessions.length === 0" description="还没有会话" size="small" />
             <div
@@ -67,12 +65,6 @@
             <div class="chat-room-title">
               <div>
                 <h2>{{ activeSessionTitle }}</h2>
-                <p>Ask a research question, search literature, or describe a task.</p>
-              </div>
-              <div class="chat-room-tags">
-                <span>Literature Review</span>
-                <span>Agent Workflow</span>
-                <span>Knowledge RAG</span>
               </div>
             </div>
           </template>
@@ -80,6 +72,9 @@
             <div class="chat-toolbar">
               <NCheckbox v-model:checked="ragDisabled">禁用知识库</NCheckbox>
               <NCheckbox v-model:checked="planMode">计划模式</NCheckbox>
+              <NButton v-if="isDemoExperience" secondary round @click="toggleDemoQuestionsPanel">
+                {{ showDemoQuestions ? '隐藏示例' : '示例问题' }}
+              </NButton>
               <NSelect
                 v-model:value="selectedSkillId"
                 style="width: 190px"
@@ -92,23 +87,20 @@
             </div>
           </template>
 
-          <div class="chat-intro-bar">
-            <div>
-              <div class="chat-intro-bar__title">Research Copilot Workspace</div>
-              <div class="chat-intro-bar__desc">支持 `/literature topic 5篇 bibtex` 检索文献；后续 Agent 将在右侧展示任务拆解、工具调用和执行轨迹。</div>
-            </div>
-            <div class="chat-intro-bar__status"><span /> Live</div>
-          </div>
-
-          <div v-if="showDemoQuestions" class="demo-question-strip">
-            <div class="demo-question-strip__head">
-              <strong>Demo 示例问题</strong>
-              <span>点击后会填入输入框，你可以直接发送或继续修改。</span>
-            </div>
-            <div class="demo-question-strip__grid">
-              <button v-for="question in demoQuestions" :key="question" type="button" @click="useDemoQuestion(question)">
-                {{ question }}
-              </button>
+          <div class="chat-prelude">
+            <div v-if="showDemoQuestions" class="demo-question-strip">
+              <div class="demo-question-strip__head">
+                <div>
+                  <strong>Demo 示例问题</strong>
+                  <span>点击后会填入输入框，你可以直接发送或继续修改。</span>
+                </div>
+                <NButton text size="tiny" @click="setDemoQuestionsPanelMode('closed')">收起</NButton>
+              </div>
+              <div class="demo-question-strip__grid">
+                <button v-for="question in demoQuestions" :key="question" type="button" @click="useDemoQuestion(question)">
+                  {{ question }}
+                </button>
+              </div>
             </div>
           </div>
 
@@ -172,12 +164,6 @@
                   placeholder="选择模型"
                   @update:value="handleModelChange"
                 />
-              </div>
-              <div class="chat-composer__quick-actions">
-                <button type="button" @click="draft = '/literature polarimetric FDA-MIMO self-protection jamming 5篇 bibtex'">Search Papers</button>
-                <button type="button" @click="draft = '帮我润色论文'">Polish Paper</button>
-                <button type="button" @click="planMode = !planMode">{{ planMode ? 'ReAct Mode' : 'Plan Mode' }}</button>
-                <button type="button" @click="showProcessMessages = !showProcessMessages">Tool Trace</button>
               </div>
             </div>
             <NInput
@@ -288,6 +274,7 @@ import {
   getPlan,
   listMessages,
   listSessions,
+  sendMessage,
   updateSession as updateAgentSession,
   type AgentMessageResponse,
   type AgentPlanResponse,
@@ -323,14 +310,16 @@ interface MessageSegment {
   content: string;
 }
 
+type DemoQuestionsPanelMode = 'auto' | 'open' | 'closed';
+
 const router = useRouter();
 const route = useRoute();
 const authStore = useAuthStore();
 const DEFAULT_DEMO_QUESTIONS = [
-  '根据知识库，概括这个项目能解决什么问题。',
-  '演示文档里的组会时间、地点和下次 DDL 是什么？',
-  '这个项目的 RAG 流程包含哪些步骤？',
-  '用计划模式帮我把两周内完善 Agent 能力拆成任务。',
+  '根据演示知识库，这个项目主要解决哪三类科研工作流问题？',
+  '演示文档里的组会时间、会议地点和下次 DDL 分别是什么？',
+  '根据 RAG 笔记，系统从文档上传到生成回答经历哪些步骤？',
+  '如果我要在两周内改进 Agent 体验，演示文档建议优先做哪些任务？',
 ];
 const sessions = ref<AgentSessionResponse[]>([]);
 const selectedSessionId = ref<number | null>(null);
@@ -352,17 +341,33 @@ const currentSocket = ref<WebSocket | null>(null);
 const currentAssistantMessageId = ref<string | null>(null);
 const currentAssistantMessageSessionId = ref<number | null>(null);
 const messagesContainerRef = ref<HTMLElement | null>(null);
+const loadedSessionIds = ref<Record<number, boolean>>({});
+const sessionsLoaded = ref(false);
 const renameModalVisible = ref(false);
 const renameSessionId = ref<number | null>(null);
 const renameDraft = ref('');
 const renaming = ref(false);
 const CHAT_SIDEBAR_COLLAPSED_KEY = 'yanban.chat.sessionsCollapsed';
 const AGENT_SIDEBAR_COLLAPSED_KEY = 'yanban.chat.agentCollapsed';
+const DEMO_QUESTIONS_MODE_KEY = 'yanban.chat.demoQuestionsMode';
 const chatSidebarCollapsed = ref(readStoredBoolean(CHAT_SIDEBAR_COLLAPSED_KEY, false));
 const agentSidebarCollapsed = ref(readStoredBoolean(AGENT_SIDEBAR_COLLAPSED_KEY, false));
+const demoQuestionsPanelMode = ref<DemoQuestionsPanelMode>(readStoredDemoQuestionsMode());
 const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-flash';
 const DEFAULT_GLM_MODEL = 'glm-5.2';
 let messagesRequestSeq = 0;
+
+class WsSendError extends Error {
+  opened: boolean;
+  streamed: boolean;
+
+  constructor(message: string, opened: boolean, streamed: boolean) {
+    super(message);
+    this.name = 'WsSendError';
+    this.opened = opened;
+    this.streamed = streamed;
+  }
+}
 
 const sessionMenuOptions = [
   { label: '重命名', key: 'rename' },
@@ -423,7 +428,19 @@ const filteredMessages = computed(() => {
 });
 
 const isDemoExperience = computed(() => route.query.demo === '1' || Boolean(authStore.currentUser?.demo));
-const showDemoQuestions = computed(() => isDemoExperience.value && !sending.value && filteredMessages.value.length === 0);
+const currentConversationLoaded = computed(() => {
+  if (selectedSessionId.value == null) {
+    return sessionsLoaded.value && sessions.value.length === 0;
+  }
+  return Boolean(loadedSessionIds.value[selectedSessionId.value]);
+});
+const showDemoQuestions = computed(() => {
+  if (!isDemoExperience.value || sending.value || messagesLoading.value || !currentConversationLoaded.value) {
+    return false;
+  }
+  return demoQuestionsPanelMode.value === 'open'
+    || (demoQuestionsPanelMode.value === 'auto' && filteredMessages.value.length === 0);
+});
 
 onMounted(async () => {
   applyMobileChatDefaults();
@@ -434,7 +451,9 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
-  currentSocket.value?.close();
+  if (!sending.value) {
+    currentSocket.value?.close();
+  }
 });
 
 async function loadDemoConfigIfNeeded() {
@@ -499,8 +518,12 @@ async function loadSkills() {
 async function loadSessions(selectLatest = true) {
   const { data } = await listSessions();
   sessions.value = data;
+  sessionsLoaded.value = true;
   if (selectLatest && data.length > 0) {
     await selectSession(data[0].id);
+  } else if (data.length === 0) {
+    selectedSessionId.value = null;
+    messages.value = [];
   }
 }
 
@@ -516,7 +539,10 @@ async function selectSession(sessionId: number) {
   await reloadCurrentMessages(sessionId);
 }
 
-async function reloadCurrentMessages(sessionId = selectedSessionId.value) {
+async function reloadCurrentMessages(
+  sessionId = selectedSessionId.value,
+  options: { preservePending?: boolean } = {},
+) {
   if (!sessionId) {
     messages.value = [];
     return;
@@ -525,8 +551,16 @@ async function reloadCurrentMessages(sessionId = selectedSessionId.value) {
   messagesLoading.value = selectedSessionId.value === sessionId && !messagesBySessionId.value[sessionId]?.length;
   try {
     const { data } = await listMessages(sessionId, { limit: 50, view: showProcessMessages.value ? 'all' : 'chat' });
-    const nextMessages = data.map(toViewMessage);
+    const serverMessages = data.map(toViewMessage);
+    const preservePending = options.preservePending ?? shouldPreservePendingMessages(sessionId);
+    const nextMessages = preservePending
+      ? mergeWithPendingMessages(sessionId, serverMessages)
+      : serverMessages;
     setSessionMessages(sessionId, nextMessages);
+    loadedSessionIds.value = {
+      ...loadedSessionIds.value,
+      [sessionId]: true,
+    };
     if (selectedSessionId.value === sessionId && requestSeq === messagesRequestSeq) {
       await scrollMessagesToBottom();
     }
@@ -535,6 +569,28 @@ async function reloadCurrentMessages(sessionId = selectedSessionId.value) {
       messagesLoading.value = false;
     }
   }
+}
+
+function shouldPreservePendingMessages(sessionId: number) {
+  return sending.value && currentAssistantMessageSessionId.value === sessionId;
+}
+
+function mergeWithPendingMessages(sessionId: number, serverMessages: ChatMessageView[]) {
+  const currentMessages = messagesBySessionId.value[sessionId] || [];
+  const pendingMessages = currentMessages.filter((message) => !message.localId.startsWith('server-'));
+  const missingPendingMessages = pendingMessages.filter((pending) => !serverMessages.some((serverMessage) => (
+    serverMessage.role === pending.role && isSameOrCompletedPendingMessage(serverMessage, pending)
+  )));
+  return [...serverMessages, ...missingPendingMessages];
+}
+
+function isSameOrCompletedPendingMessage(serverMessage: ChatMessageView, pendingMessage: ChatMessageView) {
+  const serverContent = serverMessage.content.trim();
+  const pendingContent = pendingMessage.content.trim();
+  if (serverContent === pendingContent) {
+    return true;
+  }
+  return pendingMessage.role === 'assistant' && Boolean(pendingContent) && serverContent.includes(pendingContent);
 }
 
 function setSessionMessages(sessionId: number, nextMessages: ChatMessageView[]) {
@@ -644,14 +700,14 @@ async function handleSend() {
     if (planMode.value && !isPlanArtifactRequest(content)) {
       await sendPlanMessage(sessionId, content, ragDisabled.value, selectedSkillId.value);
     } else {
-      await sendWsMessage(sessionId, content, ragDisabled.value, selectedSkillId.value);
+      await sendRealtimeMessageWithFallback(sessionId, content, ragDisabled.value, selectedSkillId.value);
     }
   } catch (error: any) {
     removePendingAssistant();
     if (activeSendSessionId) {
-      await reloadCurrentMessages(activeSendSessionId).catch(() => undefined);
+      await reloadCurrentMessages(activeSendSessionId, { preservePending: false }).catch(() => undefined);
     }
-    ui.message.error(error.response?.data?.message || error.message || '发送失败');
+    ui.message.error(formatSendError(error));
     sending.value = false;
   }
 }
@@ -760,6 +816,8 @@ async function sendWsMessage(sessionId: number, content: string, disableRag: boo
 
   await new Promise<void>((resolve, reject) => {
     let settled = false;
+    let opened = false;
+    let streamed = false;
     const token = authStore.token;
     if (!token) {
       reject(new Error('未登录'));
@@ -774,12 +832,12 @@ async function sendWsMessage(sessionId: number, content: string, disableRag: boo
       resolve();
     };
 
-    const finishReject = (error: Error) => {
+    const finishReject = (message: string) => {
       if (settled) {
         return;
       }
       settled = true;
-      reject(error);
+      reject(new WsSendError(message, opened, streamed));
     };
 
     const backendHttpBase = import.meta.env.DEV
@@ -790,6 +848,7 @@ async function sendWsMessage(sessionId: number, content: string, disableRag: boo
     currentSocket.value = ws;
 
     ws.onopen = () => {
+      opened = true;
       ws.send(JSON.stringify({
         sessionId,
         content,
@@ -799,13 +858,21 @@ async function sendWsMessage(sessionId: number, content: string, disableRag: boo
     };
 
     ws.onmessage = async (event) => {
-      const payload = JSON.parse(event.data) as WsChatEvent;
+      let payload: WsChatEvent;
+      try {
+        payload = JSON.parse(event.data) as WsChatEvent;
+      } catch {
+        finishReject('实时响应格式异常');
+        ws.close();
+        return;
+      }
       if (payload.type === 'chunk' && payload.content) {
+        streamed = true;
         appendAssistantChunk(payload.content);
         return;
       }
       if (payload.type === 'error') {
-        finishReject(new Error(payload.error || 'WebSocket 对话失败'));
+        finishReject(payload.error || '对话处理失败');
         ws.close();
         return;
       }
@@ -819,14 +886,55 @@ async function sendWsMessage(sessionId: number, content: string, disableRag: boo
       }
     };
 
-    ws.onerror = () => finishReject(new Error('WebSocket 连接失败'));
+    ws.onerror = () => {
+      finishReject('实时连接失败');
+      ws.close();
+    };
     ws.onclose = () => {
       currentSocket.value = null;
       if (!settled && sending.value) {
-        finishReject(new Error('WebSocket 连接已关闭'));
+        finishReject('实时连接已关闭');
       }
     };
   });
+}
+
+async function sendRealtimeMessageWithFallback(sessionId: number, content: string, disableRag: boolean, skillId: string | null) {
+  try {
+    await sendWsMessage(sessionId, content, disableRag, skillId);
+  } catch (error: any) {
+    if (error instanceof WsSendError && !error.opened && !error.streamed) {
+      await sendHttpMessage(sessionId, content, disableRag, skillId);
+      return;
+    }
+    throw error;
+  }
+}
+
+async function sendHttpMessage(sessionId: number, content: string, disableRag: boolean, skillId: string | null) {
+  const { data } = await sendMessage(sessionId, {
+    content,
+    ragDisabled: disableRag,
+    skillId,
+  });
+  if (!data.success) {
+    throw new Error(data.errorMessage || '对话处理失败');
+  }
+  if (data.assistantContent) {
+    await setAssistantContent(data.assistantContent);
+  }
+  if (data.navigationUrl) {
+    attachAssistantNavigation(data.navigationUrl);
+  }
+  await afterSendFinished(sessionId);
+}
+
+function formatSendError(error: any) {
+  const message = error?.response?.data?.message || error?.message || '发送失败';
+  if (message.includes('WebSocket') || message.includes('实时连接')) {
+    return '回复连接中断，已尝试恢复最新会话内容。';
+  }
+  return message;
 }
 
 async function appendAssistantChunk(chunk: string) {
@@ -937,6 +1045,25 @@ function setStoredBoolean(key: string, value: boolean) {
   }
 }
 
+function readStoredDemoQuestionsMode(): DemoQuestionsPanelMode {
+  if (typeof window === 'undefined') {
+    return 'auto';
+  }
+  const value = window.localStorage.getItem(DEMO_QUESTIONS_MODE_KEY);
+  return value === 'auto' || value === 'open' || value === 'closed' ? value : 'auto';
+}
+
+function setDemoQuestionsPanelMode(mode: DemoQuestionsPanelMode) {
+  demoQuestionsPanelMode.value = mode;
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem(DEMO_QUESTIONS_MODE_KEY, mode);
+  }
+}
+
+function toggleDemoQuestionsPanel() {
+  setDemoQuestionsPanelMode(showDemoQuestions.value ? 'closed' : 'open');
+}
+
 function setChatSidebarCollapsed(collapsed: boolean) {
   chatSidebarCollapsed.value = collapsed;
   setStoredBoolean(CHAT_SIDEBAR_COLLAPSED_KEY, collapsed);
@@ -1011,7 +1138,7 @@ async function afterSendFinished(sessionId: number) {
   sending.value = false;
   currentAssistantMessageId.value = null;
   currentAssistantMessageSessionId.value = null;
-  await reloadCurrentMessages(sessionId);
+  await reloadCurrentMessages(sessionId, { preservePending: false });
   const { data } = await listSessions();
   sessions.value = data;
   const active = sessions.value.find((item) => item.id === selectedSessionId.value);
@@ -1043,12 +1170,13 @@ function planStepClass(status: AgentPlanStepResponse['status']) {
 }
 
 function toViewMessage(message: AgentMessageResponse): ChatMessageView {
+  const content = message.content || '';
   return {
     localId: `server-${message.id}`,
     role: normalizeRole(message.role),
-    content: message.content,
+    content,
     toolCallsJson: message.toolCallsJson,
-    navigationUrl: extractNavigationUrl(message.content),
+    navigationUrl: extractNavigationUrl(content),
   };
 }
 
@@ -1101,8 +1229,8 @@ function getMessageSegments(content: string): MessageSegment[] {
   return segments.length > 0 ? segments : [{ type: 'text', content: source }];
 }
 
-function extractNavigationUrl(content: string) {
-  const matched = content.match(/\/paper(?:\?[^\s]+)?/);
+function extractNavigationUrl(content: string | null | undefined) {
+  const matched = (content || '').match(/\/paper(?:\?[^\s]+)?/);
   return matched?.[0] || null;
 }
 

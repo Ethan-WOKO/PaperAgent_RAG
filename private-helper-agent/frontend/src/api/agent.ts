@@ -17,8 +17,9 @@ export interface AgentMessageResponse {
   sessionId: number;
   userId: number;
   role: string;
-  content: string;
+  content: string | null;
   toolCallsJson: string | null;
+  toolCallId: string | null;
   paperTaskId: number | null;
   createdAt: string;
 }
@@ -55,6 +56,25 @@ export interface ListMessagesParams {
 
 export function listMessages(sessionId: number, params?: ListMessagesParams) {
   return http.get<AgentMessageResponse[]>(`/agent/sessions/${sessionId}/messages`, { params });
+}
+
+export interface SendMessagePayload {
+  content: string;
+  ragDisabled?: boolean;
+  skillId?: string | null;
+}
+
+export interface SendMessageResponse {
+  success: boolean;
+  assistantContent: string | null;
+  steps: number;
+  errorMessage: string | null;
+  navigationUrl: string | null;
+  messages: AgentMessageResponse[];
+}
+
+export function sendMessage(sessionId: number, payload: SendMessagePayload) {
+  return http.post<SendMessageResponse>(`/agent/sessions/${sessionId}/messages`, payload);
 }
 
 export interface AgentPlanStepResponse {
